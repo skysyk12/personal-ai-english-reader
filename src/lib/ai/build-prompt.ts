@@ -21,6 +21,9 @@ const ACTION_PROMPTS: Record<AiAction, string> = {
   explain: `请解释选中内容在当前语境中的含义。优先给出当前含义、表达类型、原句自然翻译，再补充当前学习角色真正需要的信息。`,
   translate: `请自然翻译选中的句子或段落，再解释最容易误解的表达。不要逐词机械对照。`,
   grammar: `请分析句子结构：先提取主干，再说明从句、修饰成分和关键语法，最后给出一个更简单的英文改写。`,
+  summary: `请总结当前章节或页面。先用 3—5 个要点概括核心内容，再说明作者的论证或叙事推进，最后给出一段 80 字以内的中文摘要。不要补写原文中没有的信息。`,
+  vocabulary: `请从当前章节、页面或选区中提取 8—12 个最值得学习的英文词汇或搭配。每项包含：原词、当前语境义、词性或表达类型、原文中的短语境、一个简洁记忆提示。避免收录过于基础或脱离语境的词。`,
+  review: `请根据当前内容生成一组可执行的复习任务：3 道主动回忆题、2 道语境填空题、1 个 2 分钟复述任务。题目后折叠式给出答案或评分要点，并突出今天最值得复习的内容。`,
   custom: `请根据当前学习角色、原文和上下文回答用户的具体问题。`,
 };
 
@@ -85,6 +88,9 @@ ${resolvedQuestion}${briefRequested ? "\n\n输出限制：只给当前语境含�
 export function defaultQuestion(action: AiAction): string {
   if (action === "translate") return "请翻译并指出最容易误解的表达。";
   if (action === "grammar") return "请分析这句话的结构。";
+  if (action === "summary") return "请总结当前章节或页面。";
+  if (action === "vocabulary") return "请提取当前内容中最值得学习的生词和搭配。";
+  if (action === "review") return "请为当前内容生成一组复习任务。";
   if (action === "custom") return "请结合上下文帮助我理解。";
   return "这里是什么意思？";
 }

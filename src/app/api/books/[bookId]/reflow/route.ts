@@ -9,7 +9,8 @@ import { extractPdfReflow } from "@/lib/books/reflow-pdf";
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-const CACHE_FILENAME = "reflow-v5.json";
+const CACHE_FILENAME = "reflow-v6.json";
+const ASSET_DIRECTORY = "reflow-assets-v6";
 const activeJobs = new Map<string, Promise<PdfReflowDocument>>();
 
 export async function GET(
@@ -32,7 +33,7 @@ export async function GET(
 
     let job = activeJobs.get(bookId);
     if (!job) {
-      job = createReflow(book.original_file_path, cachePath);
+      job = createReflow(bookId, book.original_file_path, cachePath);
       activeJobs.set(bookId, job);
     }
     const document = await job;
@@ -50,9 +51,12 @@ export async function GET(
   }
 }
 
-async function createReflow(originalPath: string, cachePath: string) {
+async function createReflow(bookId: string, originalPath: string, cachePath: string) {
   const bytes = new Uint8Array(await fs.readFile(originalPath));
-  const document = await extractPdfReflow(bytes);
+  const document = await extractPdfReflow(bytes, {
+    assetDirectory: path.join(path.dirname(originalPath), ASSET_DIRECTORY),
+    assetUrlBase: `/api/books/${encodeURIComponent(bookId)}/reflow-assets`,
+  });
   const temporaryPath = `${cachePath}.${crypto.randomUUID()}.tmp`;
   await fs.writeFile(temporaryPath, JSON.stringify(document));
   await fs.rename(temporaryPath, cachePath);
@@ -62,7 +66,7 @@ async function createReflow(originalPath: string, cachePath: string) {
 async function readCache(cachePath: string): Promise<PdfReflowDocument | null> {
   try {
     const value = JSON.parse(await fs.readFile(cachePath, "utf8")) as PdfReflowDocument;
-    return value.version === 5 && Array.isArray(value.pages) ? value : null;
+    return value.version === 6 && Array.isArray(value.pages) ? value : null;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     return null;

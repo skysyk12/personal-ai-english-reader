@@ -1,15 +1,17 @@
 "use client";
 
 import clsx from "clsx";
-import { BookOpen, Library, NotebookPen, Search, Settings, UserRoundCog } from "lucide-react";
+import { BarChart3, BookMarked, BookOpen, BrainCircuit, Library, NotebookPen, Search, Settings, UserRoundCog } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { ThemeToggle } from "./ThemeToggle";
 
 const items = [
   { href: "/library", label: "书库", icon: Library },
-  { href: "/roles", label: "学习角色", icon: UserRoundCog },
+  { href: "/review", label: "复习", icon: BrainCircuit },
+  { href: "/vocabulary", label: "生词", icon: BookMarked },
+  { href: "/insights", label: "成长", icon: BarChart3 },
   { href: "/notes", label: "笔记", icon: NotebookPen },
-  { href: "/settings", label: "设置", icon: Settings },
 ];
 
 export function AppNav() {
@@ -42,6 +44,9 @@ export function AppNav() {
           <span>搜索或跳转</span>
           <kbd>⌘ K</kbd>
         </button>
+        <ThemeToggle />
+        <Link className="nav-utility" href="/roles" aria-label="学习角色" title="学习角色"><UserRoundCog size={15} /></Link>
+        <Link className="nav-utility" href="/settings" aria-label="设置" title="设置"><Settings size={15} /></Link>
       </div>
     </header>
   );

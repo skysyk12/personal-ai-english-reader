@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpen, ChevronRight, Clock3, FileUp, NotebookPen, Plus, Search, Trash2, X } from "lucide-react";
+import { BarChart3, BookOpen, BrainCircuit, ChevronRight, Clock3, FileUp, NotebookPen, Plus, Search, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -16,6 +16,7 @@ type LibraryBook = {
   import_status: string;
   progress: number;
   noteCount: number;
+  vocabularyCount?: number;
   last_opened_at?: string | null;
 };
 
@@ -31,6 +32,8 @@ export function LibraryClient() {
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
+  const [dueCount, setDueCount] = useState(0);
+  const [secondsToday, setSecondsToday] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const importButtonRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
@@ -39,13 +42,19 @@ export function LibraryClient() {
   const wasDialogOpenRef = useRef(false);
 
   const load = useCallback(async () => {
-    const [bookResponse, roleResponse] = await Promise.all([
+    const [bookResponse, roleResponse, vocabularyResponse, insightsResponse] = await Promise.all([
       fetch("/api/books"),
       fetch("/api/roles"),
+      fetch("/api/vocabulary"),
+      fetch("/api/insights"),
     ]);
-    const [bookData, roleData] = await Promise.all([bookResponse.json(), roleResponse.json()]);
+    const [bookData, roleData, vocabularyData, insightsData] = await Promise.all([
+      bookResponse.json(), roleResponse.json(), vocabularyResponse.json(), insightsResponse.json(),
+    ]);
     setBooks(bookData);
     setRoles(roleData);
+    setDueCount(Number(vocabularyData.counts?.due || 0));
+    setSecondsToday(Number(insightsData.overview?.secondsToday || 0));
     const defaultRole = (roleData as LearningRole[]).find((role) => role.isDefault);
     setRoleId((current) => current || defaultRole?.id || roleData[0]?.id || "");
     setLoading(false);
@@ -163,7 +172,7 @@ export function LibraryClient() {
         <div>
           <p className="eyebrow">Library · Local workspace</p>
           <h1>阅读工作区</h1>
-          <p>继续阅读、回顾批注，并用当前学习角色理解英文原文。</p>
+          <p>继续阅读，把理解沉淀为生词、复习与可见的成长信号。</p>
         </div>
         <button ref={importButtonRef} className="button primary" onClick={openImportDialog}>
           <Plus size={17} aria-hidden="true" /> 导入书籍
@@ -172,10 +181,12 @@ export function LibraryClient() {
 
       <section className="workspace-status" aria-label="工作区状态">
         <div><span>书库</span><strong>{loading ? "—" : `${books.length} 本`}</strong></div>
-        <div><span>阅读进度</span><strong>{recent ? `${recent.progress}%` : "—"}</strong></div>
-        <div><span>已保存笔记</span><strong>{books.reduce((total, book) => total + Number(book.noteCount || 0), 0)} 条</strong></div>
-        <div><span>默认学习角色</span><strong>{defaultRole?.name || "读取中"}</strong></div>
+        <div><span>今天阅读</span><strong>{secondsToday < 60 ? "—" : `${Math.round(secondsToday / 60)} 分钟`}</strong></div>
+        <div><span>待复习</span><strong>{dueCount} 个词</strong></div>
+        <div><span>学习角色</span><strong>{defaultRole?.name || "读取中"}</strong></div>
       </section>
+
+      {!loading && books.length ? <section className="library-learning-rail" aria-label="今日学习入口"><div><BrainCircuit size={16} /><span><strong>{dueCount ? `先复习 ${dueCount} 个到期词` : "今天的复习已清空"}</strong><small>主动回忆会自动安排下一次出现</small></span></div><div><Link href="/review">开始复习 <ChevronRight size={14} /></Link><Link href="/insights"><BarChart3 size={14} />成长报告</Link></div></section> : null}
 
       {loading ? (
         <LibrarySkeleton />
@@ -209,7 +220,7 @@ export function LibraryClient() {
                 >
                   <span style={{ width: `${recent.progress}%` }} />
                 </div>
-                <small>已读 {recent.progress}% · {recent.noteCount} 条笔记</small>
+                <small>已读 {recent.progress}% · {recent.noteCount} 条笔记 · {recent.vocabularyCount || 0} 个生词</small>
               </div>
               <Link href={`/reader/${recent.id}`} className="continue-link">
                 继续阅读 <ChevronRight size={18} />
@@ -226,7 +237,7 @@ export function LibraryClient() {
               <label className="search-field book-search"><Search size={15} aria-hidden="true" /><span className="visually-hidden">搜索书籍</span><input name="book-search" autoComplete="off" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索书名或作者…" /></label>
             </div>
             {visibleBooks.length ? <div className="book-table">
-              <div className="book-table-head" aria-hidden="true"><span>书籍</span><span>进度</span><span>笔记</span><span>操作</span></div>
+              <div className="book-table-head" aria-hidden="true"><span>书籍</span><span>进度</span><span>学习痕迹</span><span>操作</span></div>
               {visibleBooks.map((book) => (
                 <article className="book-row" key={book.id}>
                   <Link className="book-row-main" href={`/reader/${book.id}`} aria-label={`阅读 ${book.title}`}>
@@ -234,7 +245,7 @@ export function LibraryClient() {
                     <span className="book-row-copy"><strong>{book.title}</strong><small>{book.author} · {book.format.toUpperCase()}</small></span>
                   </Link>
                   <div className="book-row-progress"><span>{book.progress}%</span><div role="progressbar" aria-label={`${book.title} 阅读进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={book.progress}><i style={{ width: `${book.progress}%` }} /></div></div>
-                  <span className="book-note-count"><NotebookPen size={14} aria-hidden="true" />{book.noteCount}</span>
+                  <span className="book-note-count"><NotebookPen size={14} aria-hidden="true" />{book.noteCount} · {book.vocabularyCount || 0}</span>
                   <div className="book-row-actions"><Link className="icon-button subtle" aria-label={`继续阅读 ${book.title}`} href={`/reader/${book.id}`}><ChevronRight size={16} /></Link><button className="icon-button subtle" aria-label={`删除 ${book.title}`} onClick={() => void deleteBook(book)}><Trash2 size={15} /></button></div>
                 </article>
               ))}
@@ -249,7 +260,7 @@ export function LibraryClient() {
             <button ref={dialogCloseRef} type="button" className="icon-button dialog-close" aria-label="关闭" onClick={closeImportDialog}><X size={18} /></button>
             <p className="eyebrow">Add to library</p>
             <h2 id="import-title">导入一本英文书</h2>
-            <p>文件会被复制到应用数据目录；原文件移动或删除后仍能继续阅读。</p>
+            <p>文件会被复制到本地。PDF 可在“图文重排”和“原始版式”之间切换，杂志配图会按原页位置保留。</p>
             <button type="button" className="file-drop" onClick={() => inputRef.current?.click()}>
               <FileUp size={24} />
               <strong>{file?.name || "选择 EPUB 或 PDF 文件"}</strong>

@@ -11,13 +11,19 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#f5f6f8",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f5f6f8" },
+    { media: "(prefers-color-scheme: dark)", color: "#0b111a" },
+  ],
 };
 
 const themeBoot = `
   try {
-    localStorage.setItem('reader-theme', 'os');
-    document.documentElement.dataset.theme = 'os';
+    var storedTheme = localStorage.getItem('reader-theme');
+    var theme = storedTheme === 'night' || storedTheme === 'light'
+      ? storedTheme
+      : (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'light');
+    document.documentElement.dataset.theme = theme;
   } catch (_) {}
 `;
 

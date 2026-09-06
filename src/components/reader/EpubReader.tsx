@@ -12,6 +12,7 @@ export type EpubReaderHandle = {
   navigate: (href: string) => void;
   addHighlight: (cfiRange: string, color?: string) => void;
   setReadingMode: (mode: ReaderFlowMode) => void;
+  getStudyContext: () => ReaderSelection | null;
 };
 
 export type ReaderFlowMode = "scroll" | "paginated";
@@ -35,6 +36,7 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(
   const bookRef = useRef<Book | null>(null);
   const renditionRef = useRef<Rendition | null>(null);
   const readingModeRef = useRef<ReaderFlowMode>("scroll");
+  const currentCfiRef = useRef(initialCfi || "");
   const [status, setStatus] = useState("正在打开 EPUB…");
   const [error, setError] = useState("");
 
@@ -81,6 +83,21 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(
       readingModeRef.current = mode;
       renditionRef.current?.flow(flowForMode(mode));
       configureReadingContainer(mode);
+    },
+    getStudyContext: () => {
+      const contents = (renditionRef.current as (Rendition & { getContents?: () => Contents[] }) | null)
+        ?.getContents?.()?.[0];
+      const text = (contents?.document.body.textContent || "").replace(/\s+/g, " ").trim().slice(0, 7800);
+      const cfiRange = currentCfiRef.current;
+      if (!text || !cfiRange) return null;
+      return {
+        selectedText: text,
+        previous: "",
+        current: text,
+        next: "",
+        anchor: { type: "epub", cfiRange },
+        sourceKey: `epub-study:${cfiRange}:${text.slice(0, 80)}`,
+      };
     },
   }), [addHighlight, configureReadingContainer]);
 
@@ -168,19 +185,27 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(
             container.scrollBy({ top: distance, left: 0, behavior: "smooth" });
           });
         });
-        rendition.themes.register("margin-reader", {
+        const baseTheme = {
           body: {
-            color: "#222a2b !important",
             background: "transparent !important",
             "font-family": `${fontFamily} !important`,
             "line-height": `${lineHeight} !important`,
             padding: "0 4% !important",
           },
           p: { "margin-bottom": "1em !important" },
-          "::selection": { background: "rgba(67, 95, 161, 0.24) !important" },
-          a: { color: "#315eaa !important" },
+          "::selection": { background: "rgba(94, 106, 210, 0.24) !important" },
+        };
+        rendition.themes.register("margin-reader-light", {
+          ...baseTheme,
+          body: { ...baseTheme.body, color: "#202129 !important" },
+          a: { color: "#4b58bd !important" },
         });
-        rendition.themes.select("margin-reader");
+        rendition.themes.register("margin-reader-night", {
+          ...baseTheme,
+          body: { ...baseTheme.body, color: "#e8ebf0 !important" },
+          a: { color: "#aeb6ff !important" },
+        });
+        rendition.themes.select(document.documentElement.dataset.theme === "night" ? "margin-reader-night" : "margin-reader-light");
         rendition.themes.fontSize(`${fontSize}px`);
 
         rendition.on("selected", (cfiRange, contents) => {
@@ -205,6 +230,7 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(
         rendition.on("relocated", (location) => {
           labelReaderFrames();
           const cfi = location.start.cfi;
+          currentCfiRef.current = cfi;
           let percentage = location.start.percentage ?? 0;
           try { percentage = book?.locations.percentageFromCfi(cfi) ?? percentage; } catch { /* locations may still be generating */ }
           onProgress(cfi, Math.max(0, Math.min(100, percentage * 100)));
@@ -254,11 +280,22 @@ const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(
     const rendition = renditionRef.current;
     if (!rendition) return;
     rendition.themes.fontSize(`${fontSize}px`);
-    rendition.themes.register("margin-reader", {
-      body: { "font-family": `${fontFamily} !important`, "line-height": `${lineHeight} !important` },
-    });
-    rendition.themes.select("margin-reader");
+    const body = { "font-family": `${fontFamily} !important`, "line-height": `${lineHeight} !important` };
+    rendition.themes.register("margin-reader-light", { body: { ...body, color: "#202129 !important", background: "transparent !important", padding: "0 4% !important" } });
+    rendition.themes.register("margin-reader-night", { body: { ...body, color: "#e8ebf0 !important", background: "transparent !important", padding: "0 4% !important" } });
+    rendition.themes.select(document.documentElement.dataset.theme === "night" ? "margin-reader-night" : "margin-reader-light");
   }, [fontFamily, fontSize, lineHeight]);
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      renditionRef.current?.themes.select(
+        document.documentElement.dataset.theme === "night" ? "margin-reader-night" : "margin-reader-light",
+      );
+      renditionRef.current?.themes.fontSize(`${fontSize}px`);
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, [fontSize]);
 
   return (
     <div className="epub-stage">

@@ -1,7 +1,7 @@
 "use client";
 
 import clsx from "clsx";
-import { ArrowLeft, Bot, Check, ChevronDown, Highlighter, Menu, MessageSquareText, NotebookPen, PanelLeftClose, PanelRightClose, Search, Settings2, Sparkles, TextCursorInput, X } from "lucide-react";
+import { ArrowLeft, BookMarked, BookOpenText, Bot, Check, ChevronDown, Highlighter, Menu, MessageSquareText, NotebookPen, PanelLeftClose, PanelRightClose, Search, Settings2, Sparkles, TextCursorInput, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -63,7 +63,56 @@ export function ReaderWorkspace({ book, roles }: { book: BookData; roles: Learni
   const readerRef = useRef<EpubReaderHandle>(null);
   const pdfReaderRef = useRef<PdfReaderHandle>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const progressRef = useRef(progress);
   const currentRole = roles.find((role) => role.id === roleId) ?? roles[0];
+  const isStudyContext = selection?.sourceKey.includes("-study:") ?? false;
+
+  useEffect(() => { progressRef.current = progress; }, [progress]);
+
+  useEffect(() => {
+    let active = true;
+    let sessionId = "";
+    let activeSeconds = 0;
+    let activeStartedAt = document.visibilityState === "visible" ? Date.now() : 0;
+    const duration = () => activeSeconds + (activeStartedAt ? Math.floor((Date.now() - activeStartedAt) / 1000) : 0);
+    const updateVisibility = () => {
+      if (document.visibilityState === "hidden" && activeStartedAt) {
+        activeSeconds += Math.floor((Date.now() - activeStartedAt) / 1000);
+        activeStartedAt = 0;
+      } else if (document.visibilityState === "visible" && !activeStartedAt) {
+        activeStartedAt = Date.now();
+      }
+    };
+    const heartbeat = (ended = false) => {
+      if (!sessionId) return;
+      void fetch("/api/reading-sessions", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: sessionId, durationSeconds: duration(), endPercentage: progressRef.current, ended }),
+        keepalive: ended,
+      });
+    };
+    void fetch("/api/reading-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bookId: book.id, startPercentage: book.percentage }),
+    }).then(async (response) => {
+      if (!response.ok || !active) return;
+      const result = await response.json() as { id: string };
+      sessionId = result.id;
+    });
+    document.addEventListener("visibilitychange", updateVisibility);
+    const timer = window.setInterval(() => heartbeat(false), 30_000);
+    const endSession = () => heartbeat(true);
+    window.addEventListener("pagehide", endSession);
+    return () => {
+      active = false;
+      document.removeEventListener("visibilitychange", updateVisibility);
+      window.removeEventListener("pagehide", endSession);
+      window.clearInterval(timer);
+      heartbeat(true);
+    };
+  }, [book.id, book.percentage]);
 
   const handleSelection = useCallback((nextSelection: ReaderSelection) => {
     setSelection(nextSelection);
@@ -160,6 +209,19 @@ export function ReaderWorkspace({ book, roles }: { book: BookData; roles: Learni
     setAiOpen(true);
   }
 
+  function askCurrentContext(nextAction: Extract<AiAction, "summary" | "vocabulary" | "review">) {
+    const nextSelection = book.format === "epub"
+      ? readerRef.current?.getStudyContext()
+      : pdfReaderRef.current?.getStudyContext();
+    if (!nextSelection) {
+      showToast("正文仍在加载，请稍后再试");
+      return;
+    }
+    setSelection(nextSelection);
+    setAction(nextAction);
+    setAiOpen(true);
+  }
+
   function toggleAiPanel() {
     if (aiOpen) {
       setAiOpen(false);
@@ -190,6 +252,25 @@ export function ReaderWorkspace({ book, roles }: { book: BookData; roles: Learni
       }
       showToast("已添加黄色高亮");
     }
+  }
+
+  async function saveVocabulary() {
+    if (!selection) return;
+    if (selection.selectedText.length > 200) {
+      showToast("请选择一个单词或较短的短语");
+      return;
+    }
+    const response = await fetch("/api/vocabulary", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        bookId: book.id,
+        term: selection.selectedText,
+        context: selection.current,
+        anchor: selection.anchor,
+      }),
+    });
+    showToast(response.ok ? "已加入生词本，今天即可复习" : "生词保存失败");
   }
 
   async function savePersonalNote() {
@@ -243,6 +324,7 @@ export function ReaderWorkspace({ book, roles }: { book: BookData; roles: Learni
             <ChevronDown size={13} aria-hidden="true" />
           </label>
           <button aria-label="打开快速命令" className="topbar-button reader-command-button" onClick={() => window.dispatchEvent(new Event("margin:open-command-palette"))}><Search size={16} /><span>命令</span></button>
+          <button aria-label="总结当前章节或页面" className="topbar-button reader-study-button" onClick={() => askCurrentContext("summary")}><BookOpenText size={16} /><span>总结</span></button>
           <button aria-label={settingsOpen ? "关闭阅读设置" : "打开阅读设置"} className={clsx("topbar-button", settingsOpen && "is-active")} onClick={() => setSettingsOpen((open) => !open)}><Settings2 size={16} /><span>阅读设置</span></button>
           <button aria-label={aiOpen ? "关闭 AI 面板" : "打开 AI 面板"} className={clsx("topbar-button", aiOpen && "is-active")} onClick={toggleAiPanel}>{aiOpen ? <PanelRightClose size={16} /> : <Bot size={16} />}<span>AI</span></button>
         </div>
@@ -295,13 +377,14 @@ export function ReaderWorkspace({ book, roles }: { book: BookData; roles: Learni
             onToc={handleToc}
           />
         )}
-        {selection ? (
+        {selection && !isStudyContext ? (
           <div className="selection-toolbar" role="toolbar" aria-label="选区操作">
             <button onClick={() => askAi("explain")}><MessageSquareText size={15} />解释</button>
             <button onClick={() => askAi("translate")}><Sparkles size={15} />翻译</button>
             <button onClick={() => askAi("grammar")}><TextCursorInput size={15} />句子分析</button>
             <button onClick={() => askAi("custom")}><Bot size={15} />自由提问</button>
             <span />
+            <button onClick={() => void saveVocabulary()}><BookMarked size={15} />生词</button>
             <button onClick={() => void saveHighlight()}><Highlighter size={15} />高亮</button>
             <button onClick={() => setNoteOpen(true)}><NotebookPen size={15} />笔记</button>
             <button className="icon-only" aria-label="关闭选区工具" onClick={() => setSelection(null)}><X size={15} /></button>
@@ -315,11 +398,11 @@ export function ReaderWorkspace({ book, roles }: { book: BookData; roles: Learni
               {book.format === "pdf" ? (
                 <>
                   <div className="reading-mode-options">
-                    <button type="button" aria-pressed={pdfViewMode === "reflow"} className={pdfViewMode === "reflow" ? "is-active" : ""} onClick={() => changePdfViewMode("reflow")}>文本重排</button>
+                    <button type="button" aria-pressed={pdfViewMode === "reflow"} className={pdfViewMode === "reflow" ? "is-active" : ""} onClick={() => changePdfViewMode("reflow")}>图文重排</button>
                     <button type="button" aria-pressed={pdfViewMode === "original"} className={pdfViewMode === "original" ? "is-active" : ""} onClick={() => changePdfViewMode("original")}>PDF 原版</button>
                   </div>
                   <small>{pdfViewMode === "reflow"
-                    ? "文字会按阅读宽度重新换行；图片、表格与复杂版式请用原版核对。"
+                    ? "文字与文章配图会按原页位置重建阅读顺序；表格和复杂版式可用原版核对。"
                     : "直接阅读 PDF 原始页面，保留图片、表格和版式。"}</small>
                 </>
               ) : (
@@ -343,12 +426,12 @@ export function ReaderWorkspace({ book, roles }: { book: BookData; roles: Learni
         ) : null}
       </section>
 
-      {aiOpen && currentRole ? <AiPanel key={`${selection?.sourceKey || "empty"}:${action || "none"}:${roleId}`} book={book} selection={selection} action={action} role={currentRole} onClose={() => setAiOpen(false)} /> : null}
+      {aiOpen && currentRole ? <AiPanel key={`${selection?.sourceKey || "empty"}:${action || "none"}:${roleId}`} book={book} selection={selection} action={action} role={currentRole} onActionChange={setAction} onClose={() => setAiOpen(false)} /> : null}
 
       <footer className="reader-footer">
         <span>{Math.round(progress)}%</span>
         <div className="reader-progress" role="progressbar" aria-label="阅读进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)}><i style={{ width: `${Math.round(progress)}%` }} /></div>
-        <span>{book.format === "pdf" ? `PDF · ${pdfViewMode === "reflow" ? "重排" : "原版"}` : "EPUB"}</span>
+        <span>{book.format === "pdf" ? `PDF · ${pdfViewMode === "reflow" ? "图文重排" : "原版"}` : "EPUB"}</span>
       </footer>
 
       {noteOpen && selection ? (

@@ -1,6 +1,6 @@
 "use client";
 
-import { BookmarkPlus, Copy, CornerDownLeft, RefreshCcw, Send, Square, X } from "lucide-react";
+import { BookOpenText, BookmarkPlus, Copy, CornerDownLeft, ListChecks, RefreshCcw, ScanText, Send, Square, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -14,6 +14,7 @@ type Props = {
   selection: ReaderSelection | null;
   action: AiAction | null;
   role: LearningRole;
+  onActionChange: (action: AiAction) => void;
   onClose: () => void;
 };
 
@@ -21,10 +22,13 @@ const ACTION_LABELS: Record<AiAction, string> = {
   explain: "解释",
   translate: "翻译",
   grammar: "句子分析",
+  summary: "内容总结",
+  vocabulary: "生词提取",
+  review: "复习任务",
   custom: "自由提问",
 };
 
-export function AiPanel({ book, selection, action, role, onClose }: Props) {
+export function AiPanel({ book, selection, action, role, onActionChange, onClose }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -34,13 +38,14 @@ export function AiPanel({ book, selection, action, role, onClose }: Props) {
   const abortRef = useRef<AbortController | null>(null);
   const lastAutoRequest = useRef("");
   const resolvedAction: AiAction = action ?? "custom";
+  const isStudyContext = selection?.sourceKey.includes("-study:") ?? false;
 
   useEffect(() => {
     if (!selection || resolvedAction === "custom") return;
     const key = `${selection.sourceKey}:${resolvedAction}:${role.id}`;
     if (lastAutoRequest.current === key) return;
     lastAutoRequest.current = key;
-    void send(resolvedAction === "explain" ? "这里是什么意思？" : resolvedAction === "translate" ? "请自然翻译这段内容。" : "请分析这句话的结构。", false);
+    void send(defaultActionQuestion(resolvedAction), false);
   // send intentionally starts only when the selected action identity changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resolvedAction, role.id, selection?.sourceKey]);
@@ -128,8 +133,13 @@ export function AiPanel({ book, selection, action, role, onClose }: Props) {
       </header>
       {selection ? (
         <div className="selection-context">
-          <small>当前选区 · {ACTION_LABELS[resolvedAction]}</small>
+          <small>{isStudyContext ? "当前章节 / 页面" : "当前选区"} · {ACTION_LABELS[resolvedAction]}</small>
           <blockquote>{selection.selectedText}</blockquote>
+          <div className="ai-study-switcher" role="group" aria-label="学习生成工具">
+            <button type="button" aria-pressed={resolvedAction === "summary"} onClick={() => onActionChange("summary")}><BookOpenText size={14} />总结</button>
+            <button type="button" aria-pressed={resolvedAction === "vocabulary"} onClick={() => onActionChange("vocabulary")}><ScanText size={14} />生词</button>
+            <button type="button" aria-pressed={resolvedAction === "review"} onClick={() => onActionChange("review")}><ListChecks size={14} />复习任务</button>
+          </div>
         </div>
       ) : (
         <div className="ai-empty"><strong>选择英文后开始提问</strong><span>在正文中拖选单词、句子或短段落，然后使用解释、翻译、句子分析或自由提问。</span></div>
@@ -157,4 +167,14 @@ export function AiPanel({ book, selection, action, role, onClose }: Props) {
       </form>
     </aside>
   );
+}
+
+function defaultActionQuestion(action: AiAction) {
+  if (action === "explain") return "这里是什么意思？";
+  if (action === "translate") return "请自然翻译这段内容。";
+  if (action === "grammar") return "请分析这句话的结构。";
+  if (action === "summary") return "请总结当前章节或页面。";
+  if (action === "vocabulary") return "请提取最值得学习的生词和搭配。";
+  if (action === "review") return "请生成一组复习任务。";
+  return "请结合上下文帮助我理解。";
 }

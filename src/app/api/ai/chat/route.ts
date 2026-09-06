@@ -19,18 +19,18 @@ export const maxDuration = 120;
 const chatInput = z.object({
   bookId: z.string().min(1),
   roleId: z.string().min(1),
-  action: z.enum(["explain", "translate", "grammar", "custom"]),
-  selectedText: z.string().trim().min(1).max(2000),
+  action: z.enum(["explain", "translate", "grammar", "summary", "vocabulary", "review", "custom"]),
+  selectedText: z.string().trim().min(1).max(8000),
   anchor: z.discriminatedUnion("type", [
     z.object({ type: z.literal("epub"), cfiRange: z.string().min(1).max(4000) }),
     z.object({
       type: z.literal("pdf"),
       page: z.number().int().min(1),
-      textQuote: z.string().trim().min(1).max(2000),
+      textQuote: z.string().trim().min(1).max(8000),
     }),
   ]),
   context: z.object({
-    current: z.string().max(4000),
+    current: z.string().max(8000),
     previous: z.string().max(800),
     next: z.string().max(800),
   }),
@@ -177,7 +177,7 @@ export async function POST(request: Request) {
           stream_options: { include_usage: true },
           thinking: { type: "disabled" },
           temperature: 0.35,
-          max_tokens: 2200,
+          max_tokens: input.action === "summary" || input.action === "vocabulary" || input.action === "review" ? 3200 : 2200,
         }),
         signal: request.signal,
       },

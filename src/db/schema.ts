@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const books = sqliteTable("books", {
   id: text("id").primaryKey(),
@@ -114,6 +114,57 @@ export const appSettings = sqliteTable("app_settings", {
   updatedAt: text("updated_at").notNull(),
 });
 
+export const vocabulary = sqliteTable("vocabulary", {
+  id: text("id").primaryKey(),
+  bookId: text("book_id").notNull(),
+  term: text("term").notNull(),
+  normalizedTerm: text("normalized_term").notNull(),
+  definition: text("definition").notNull().default(""),
+  phonetic: text("phonetic").notNull().default(""),
+  partOfSpeech: text("part_of_speech").notNull().default(""),
+  context: text("context").notNull().default(""),
+  anchorJson: text("anchor_json").notNull(),
+  status: text("status", { enum: ["new", "learning", "mastered"] }).notNull().default("new"),
+  easeFactor: real("ease_factor").notNull().default(2.5),
+  intervalDays: integer("interval_days").notNull().default(0),
+  repetitions: integer("repetitions").notNull().default(0),
+  dueAt: text("due_at").notNull(),
+  lastReviewedAt: text("last_reviewed_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const vocabularyReviews = sqliteTable("vocabulary_reviews", {
+  id: text("id").primaryKey(),
+  vocabularyId: text("vocabulary_id").notNull(),
+  rating: text("rating", { enum: ["again", "hard", "good", "easy"] }).notNull(),
+  previousInterval: integer("previous_interval").notNull().default(0),
+  nextInterval: integer("next_interval").notNull().default(0),
+  reviewedAt: text("reviewed_at").notNull(),
+});
+
+export const readingSessions = sqliteTable("reading_sessions", {
+  id: text("id").primaryKey(),
+  bookId: text("book_id").notNull(),
+  startedAt: text("started_at").notNull(),
+  endedAt: text("ended_at"),
+  durationSeconds: integer("duration_seconds").notNull().default(0),
+  startPercentage: integer("start_percentage").notNull().default(0),
+  endPercentage: integer("end_percentage").notNull().default(0),
+});
+
+export const searchDocuments = sqliteTable("search_documents", {
+  id: text("id").primaryKey(),
+  bookId: text("book_id").notNull(),
+  sourceType: text("source_type").notNull(),
+  locationKey: text("location_key").notNull(),
+  title: text("title").notNull().default(""),
+  content: text("content").notNull(),
+  anchorJson: text("anchor_json").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export type Book = typeof books.$inferSelect;
 export type LearningRoleRow = typeof learningRoles.$inferSelect;
 export type NoteRow = typeof notes.$inferSelect;
+export type VocabularyRow = typeof vocabulary.$inferSelect;

@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { sqlite } from "@/db";
 import { readEpubMetadata } from "@/lib/books/import-epub";
 import { readPdfMetadata } from "@/lib/books/import-pdf";
+import { ensureBookSearchIndex } from "@/lib/books/search-index";
 
 export const runtime = "nodejs";
 
@@ -79,7 +80,7 @@ export async function POST(request: Request) {
           originalPath,
           coverPath,
           parseScore,
-          format === "pdf" ? "original" : null,
+          format === "pdf" ? "reflow" : null,
           pageCount,
           roleId,
           now,
@@ -93,6 +94,10 @@ export async function POST(request: Request) {
         `)
         .run(`progress_${crypto.randomUUID()}`, id, format, roleId, now);
     })();
+
+    if (format === "epub") {
+      await ensureBookSearchIndex({ id, format });
+    }
 
     return NextResponse.json(
       { id, title: metadata.title, author: metadata.author, format },

@@ -1,6 +1,7 @@
 "use client";
 
 import { FileScan, LoaderCircle } from "lucide-react";
+import Image from "next/image";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 import type { PdfReflowBlock, PdfReflowDocument } from "@/lib/books/pdf-reflow-types";
@@ -52,7 +53,7 @@ const PdfReflowReader = forwardRef<PdfReaderHandle, Props>(function PdfReflowRea
   const currentPageRef = useRef(Math.max(1, initialPage || 1));
   const savedHighlightsRef = useRef<StoredPdfHighlight[]>([]);
   const [document, setDocument] = useState<PdfReflowDocument | null>(null);
-  const [status, setStatus] = useState("正在提取 PDF 文字并重新排版…");
+  const [status, setStatus] = useState("正在识别 PDF 图文结构并重新排版…");
   const [error, setError] = useState("");
 
   const refreshSavedHighlights = useCallback(() => {
@@ -113,6 +114,24 @@ const PdfReflowReader = forwardRef<PdfReaderHandle, Props>(function PdfReflowRea
         { page: anchor.page, selectedText },
       ];
       refreshSavedHighlights();
+    },
+    getStudyContext: () => {
+      const page = containerRef.current?.querySelector<HTMLElement>(`[data-pdf-page="${currentPageRef.current}"]`);
+      const text = Array.from(page?.querySelectorAll<HTMLElement>("[data-reflow-block]") || [])
+        .map((block) => block.textContent || "")
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 7800);
+      if (!text) return null;
+      return {
+        selectedText: text,
+        previous: "",
+        current: text,
+        next: "",
+        anchor: { type: "pdf", page: currentPageRef.current, textQuote: text },
+        sourceKey: `pdf-reflow-study:${currentPageRef.current}:${text.slice(0, 80)}`,
+      };
     },
   }), [navigate, refreshSavedHighlights]);
 
@@ -259,7 +278,7 @@ const PdfReflowReader = forwardRef<PdfReaderHandle, Props>(function PdfReflowRea
         ref={containerRef}
         className="pdf-reflow-scroll"
         role="region"
-        aria-label="PDF 文本重排阅读区域"
+        aria-label="PDF 图文重排阅读区域"
         tabIndex={0}
         style={{
           "--reflow-font-size": `${fontSize}px`,
@@ -272,15 +291,15 @@ const PdfReflowReader = forwardRef<PdfReaderHandle, Props>(function PdfReflowRea
         {document ? (
           <article className="pdf-reflow-document">
             <header className="pdf-reflow-intro">
-              <span>Text reflow</span>
-              <p>文字已按阅读宽度重新排版。遇到图片、表格或复杂分栏时，可切换至 PDF 原版核对。</p>
+              <span>Living reflow · {document.imageCount} images</span>
+              <p>文字与文章配图已按原页位置重建阅读顺序。遇到表格或复杂版式时，可随时切换至 PDF 原版核对。</p>
             </header>
             {document.pages.map((page) => (
               <section className="pdf-reflow-page" data-pdf-page={page.pageNumber} aria-label={`第 ${page.pageNumber} 页`} key={page.pageNumber}>
                 <div className="pdf-reflow-page-label" aria-hidden="true"><span>Page</span><strong>{page.pageNumber}</strong></div>
                 <div className="pdf-reflow-content">
                   {page.blocks.length
-                    ? page.blocks.map((block) => <ReflowBlock block={block} key={block.id} />)
+                    ? page.blocks.map((block) => <ReflowBlock block={block} priority={page.pageNumber === (initialPage || 1)} key={block.id} />)
                     : <p className="pdf-reflow-page-empty">本页没有可提取的文字。</p>}
                 </div>
               </section>
@@ -302,7 +321,35 @@ const PdfReflowReader = forwardRef<PdfReaderHandle, Props>(function PdfReflowRea
 
 export default PdfReflowReader;
 
-function ReflowBlock({ block }: { block: PdfReflowBlock }) {
+function ReflowBlock({ block, priority = false }: { block: PdfReflowBlock; priority?: boolean }) {
+  if (block.kind === "image") {
+    const width = Math.min(100, Math.max(26, block.layout.width / 0.74 * 100));
+    const alignment = block.layout.left > 0.48
+      ? "flex-end"
+      : block.layout.left < 0.18
+        ? "flex-start"
+        : "center";
+    return (
+      <figure
+        className="pdf-reflow-figure"
+        style={{
+          "--reflow-image-width": `${width}%`,
+          "--reflow-image-align": alignment,
+        } as React.CSSProperties}
+      >
+        <Image
+          src={block.src}
+          alt={block.alt}
+          width={block.intrinsicWidth}
+          height={block.intrinsicHeight}
+          sizes="(max-width: 900px) 92vw, 720px"
+          loading={priority ? "eager" : "lazy"}
+          fetchPriority={priority ? "high" : "auto"}
+          unoptimized
+        />
+      </figure>
+    );
+  }
   if (block.kind === "heading") return <h2 data-reflow-block>{block.text}</h2>;
   if (block.kind === "list-item") return <p className="pdf-reflow-list-item" data-reflow-block>{block.text}</p>;
   return <p data-reflow-block>{block.text}</p>;

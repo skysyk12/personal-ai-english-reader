@@ -14,10 +14,12 @@ export async function GET() {
         COALESCE(p.percentage, 0) AS progress,
         p.epub_cfi AS epubCfi,
         p.pdf_page AS pdfPage,
-        COUNT(DISTINCT n.id) AS noteCount
+        COUNT(DISTINCT n.id) AS noteCount,
+        COUNT(DISTINCT v.id) AS vocabularyCount
       FROM books b
       LEFT JOIN reading_progress p ON p.book_id = b.id
       LEFT JOIN notes n ON n.book_id = b.id
+      LEFT JOIN vocabulary v ON v.book_id = b.id
       GROUP BY b.id
       ORDER BY COALESCE(b.last_opened_at, b.created_at) DESC
     `)
@@ -34,6 +36,10 @@ export async function DELETE(request: Request) {
   if (!book) return NextResponse.json({ error: "没有找到该书籍。" }, { status: 404 });
 
   sqlite.transaction(() => {
+    sqlite.prepare("DELETE FROM vocabulary_reviews WHERE vocabulary_id IN (SELECT id FROM vocabulary WHERE book_id = ?)").run(bookId);
+    sqlite.prepare("DELETE FROM vocabulary WHERE book_id = ?").run(bookId);
+    sqlite.prepare("DELETE FROM reading_sessions WHERE book_id = ?").run(bookId);
+    sqlite.prepare("DELETE FROM search_documents WHERE book_id = ?").run(bookId);
     sqlite.prepare("DELETE FROM reading_progress WHERE book_id = ?").run(bookId);
     sqlite.prepare("DELETE FROM highlights WHERE book_id = ?").run(bookId);
     sqlite.prepare("DELETE FROM notes WHERE book_id = ?").run(bookId);

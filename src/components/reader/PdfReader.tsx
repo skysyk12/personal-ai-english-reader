@@ -28,6 +28,7 @@ type StoredPdfHighlight = {
 export type PdfReaderHandle = {
   navigate: (page: number) => void;
   addHighlight: (anchor: Extract<ReaderAnchor, { type: "pdf" }>, selectedText: string) => void;
+  getStudyContext: () => ReaderSelection | null;
 };
 
 type Props = {
@@ -87,7 +88,20 @@ const PdfReader = forwardRef<PdfReaderHandle, Props>(function PdfReader(
       ];
       refreshSavedHighlights();
     },
-  }), [navigate, refreshSavedHighlights]);
+    getStudyContext: () => {
+      const page = viewerElementRef.current?.querySelector<HTMLElement>(`.page[data-page-number="${currentPage}"]`);
+      const text = (page?.querySelector(".textLayer")?.textContent || "").replace(/\s+/g, " ").trim().slice(0, 7800);
+      if (!text) return null;
+      return {
+        selectedText: text,
+        previous: "",
+        current: text,
+        next: "",
+        anchor: { type: "pdf", page: currentPage, textQuote: text },
+        sourceKey: `pdf-study:${currentPage}:${text.slice(0, 80)}`,
+      };
+    },
+  }), [currentPage, navigate, refreshSavedHighlights]);
 
   useEffect(() => {
     let active = true;

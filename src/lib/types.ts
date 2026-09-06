@@ -18,6 +18,7 @@ export type BookSummary = Book & {
   progress: number;
   epubCfi?: string | null;
   noteCount: number;
+  vocabularyCount?: number;
 };
 
 export type ReaderAnchor =
@@ -33,7 +34,14 @@ export type ReaderSelection = {
   sourceKey: string;
 };
 
-export type AiAction = "explain" | "translate" | "grammar" | "custom";
+export type AiAction =
+  | "explain"
+  | "translate"
+  | "grammar"
+  | "summary"
+  | "vocabulary"
+  | "review"
+  | "custom";
 
 export function deserializeRole(row: LearningRoleRow): LearningRole {
   return {

@@ -121,9 +121,62 @@ function initializeDatabase(): { sqlite: NativeDatabase; db: OrmDatabase } {
     value_json TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS vocabulary (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL,
+    term TEXT NOT NULL,
+    normalized_term TEXT NOT NULL,
+    definition TEXT NOT NULL DEFAULT '',
+    phonetic TEXT NOT NULL DEFAULT '',
+    part_of_speech TEXT NOT NULL DEFAULT '',
+    context TEXT NOT NULL DEFAULT '',
+    anchor_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'new',
+    ease_factor REAL NOT NULL DEFAULT 2.5,
+    interval_days INTEGER NOT NULL DEFAULT 0,
+    repetitions INTEGER NOT NULL DEFAULT 0,
+    due_at TEXT NOT NULL,
+    last_reviewed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(book_id, normalized_term)
+  );
+  CREATE TABLE IF NOT EXISTS vocabulary_reviews (
+    id TEXT PRIMARY KEY,
+    vocabulary_id TEXT NOT NULL,
+    rating TEXT NOT NULL,
+    previous_interval INTEGER NOT NULL DEFAULT 0,
+    next_interval INTEGER NOT NULL DEFAULT 0,
+    reviewed_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS reading_sessions (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    duration_seconds INTEGER NOT NULL DEFAULT 0,
+    start_percentage INTEGER NOT NULL DEFAULT 0,
+    end_percentage INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS search_documents (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    location_key TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL,
+    anchor_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(book_id, source_type, location_key)
+  );
   CREATE INDEX IF NOT EXISTS idx_highlights_book_id ON highlights(book_id);
   CREATE INDEX IF NOT EXISTS idx_notes_book_id ON notes(book_id);
   CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON ai_messages(conversation_id);
+  CREATE INDEX IF NOT EXISTS idx_vocabulary_book_id ON vocabulary(book_id);
+  CREATE INDEX IF NOT EXISTS idx_vocabulary_due_at ON vocabulary(due_at, status);
+  CREATE INDEX IF NOT EXISTS idx_vocabulary_reviews_word ON vocabulary_reviews(vocabulary_id);
+  CREATE INDEX IF NOT EXISTS idx_reading_sessions_book ON reading_sessions(book_id, started_at);
+  CREATE INDEX IF NOT EXISTS idx_search_documents_book ON search_documents(book_id, source_type);
 `);
 
   const seedRole = connection.prepare(`
