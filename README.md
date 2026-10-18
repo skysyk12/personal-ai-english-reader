@@ -2,6 +2,22 @@
 
 Margin 是一个本地优先的个人英文阅读与学习工作区。它把 EPUB / PDF 阅读、生词积累、间隔复习、全文搜索、阅读成长数据和按需 AI 学习动作放在同一个闭环里。界面方向采用 Readwise Reader 的连续阅读感与 Linear 的紧凑控制方式，并提供完整夜间主题。
 
+## 界面一览
+
+> 以下截图来自隔离的演示数据（演示书籍为自制 EPUB，非真实书库）。
+
+| 主界面（AI Router） | 书库 |
+| :---: | :---: |
+| ![主界面](docs/screenshots/home.png) | ![书库](docs/screenshots/library.png) |
+
+| 阅读 | 生词 |
+| :---: | :---: |
+| ![阅读](docs/screenshots/reader.png) | ![生词](docs/screenshots/vocabulary.png) |
+
+| 间隔复习 | 成长 |
+| :---: | :---: |
+| ![复习](docs/screenshots/review.png) | ![成长](docs/screenshots/insights.png) |
+
 ## 当前版本
 
 截至 2026-10-18，项目已完成 **10 个主要版本**，从初始版本之后完成了 **9 次主要更新**，当前里程碑为 **v0.10.0**。
