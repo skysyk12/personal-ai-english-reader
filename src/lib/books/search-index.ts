@@ -86,7 +86,7 @@ export async function ensureBookSearchIndex(book: SearchableBook) {
 
 async function extractPdfSearchDocuments(originalPath: string): Promise<SearchDocumentInput[]> {
   const directory = path.dirname(originalPath);
-  const cacheNames = ["reflow-v6.json", "reflow-v5.json"];
+  const cacheNames = ["reflow-v8.json", "reflow-v7.json", "reflow-v6.json", "reflow-v5.json"];
   for (const cacheName of cacheNames) {
     try {
       const document = JSON.parse(
@@ -98,7 +98,13 @@ async function extractPdfSearchDocuments(originalPath: string): Promise<SearchDo
       if (!Array.isArray(document.pages)) continue;
       return document.pages.flatMap((page) => {
         const content = page.blocks
-          .flatMap((block) => block.kind === "image" ? [] : [block.text])
+          .flatMap((block) => {
+            if (block.kind === "image") return [];
+            if (block.kind === "table") {
+              return [block.rows.flat().join(" ")];
+            }
+            return [block.text];
+          })
           .join(" ")
           .replace(/\s+/g, " ")
           .trim();

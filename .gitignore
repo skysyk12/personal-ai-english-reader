@@ -5,6 +5,8 @@ out/
 !.env.example
 data/
 dogfood-output/
+tmp/
+eng.traineddata
 *.tsbuildinfo
 *.log
 .DS_Store

@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { db, sqlite } from "@/db";
 import { learningRoles } from "@/db/schema";
 import { deserializeRole } from "@/lib/types";
-import { roleInput } from "../route";
+import { roleInput } from "@/lib/role-schema";
 
 export const runtime = "nodejs";
 

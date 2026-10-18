@@ -13,16 +13,17 @@ export default async function ReaderPage({
   searchParams,
 }: {
   params: Promise<{ bookId: string }>;
-  searchParams: Promise<{ cfi?: string; page?: string }>;
+  searchParams: Promise<{ cfi?: string; page?: string; agent?: string }>;
 }) {
   const { bookId } = await params;
-  const { cfi: requestedCfi, page: requestedPage } = await searchParams;
+  const { cfi: requestedCfi, page: requestedPage, agent: requestedAgentAction } = await searchParams;
   const book = sqlite
     .prepare(`
       SELECT
         b.id, b.title, b.author, b.format,
         b.total_locations AS totalLocations,
         b.pdf_default_mode AS pdfDefaultMode,
+        COALESCE(b.reflow_policy, 'auto') AS reflowPolicy,
         p.epub_cfi AS epubCfi,
         p.pdf_page AS pdfPage,
         COALESCE(p.percentage, 0) AS percentage,
@@ -39,6 +40,7 @@ export default async function ReaderPage({
         format: "epub" | "pdf";
         totalLocations: number | null;
         pdfDefaultMode: "reflow" | "original" | null;
+        reflowPolicy: "auto" | "none" | "local" | "api";
         epubCfi: string | null;
         pdfPage: number | null;
         percentage: number;
@@ -56,6 +58,9 @@ export default async function ReaderPage({
   const initialPdfPage = Number.isFinite(requestedPageNumber)
     ? Math.max(1, Math.min(book.totalLocations || requestedPageNumber, requestedPageNumber))
     : book.pdfPage;
+  const initialAgentAction = ["summary", "vocabulary", "review"].includes(requestedAgentAction || "")
+    ? requestedAgentAction as "summary" | "vocabulary" | "review"
+    : undefined;
 
   return (
     <ReaderWorkspace
@@ -66,6 +71,7 @@ export default async function ReaderPage({
         roleId: initialRoleId,
       }}
       roles={roles}
+      initialAgentAction={initialAgentAction}
     />
   );
 }

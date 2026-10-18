@@ -1,7 +1,7 @@
 "use client";
 
 import type { LucideIcon } from "lucide-react";
-import { BarChart3, BookMarked, BookOpen, BrainCircuit, FileText, FileUp, Library, NotebookPen, Search, Settings, UserRoundCog, X } from "lucide-react";
+import { BarChart3, BookMarked, BookOpen, BrainCircuit, FileText, FileUp, Home, Library, NotebookPen, Search, Settings, UserRoundCog, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -28,6 +28,7 @@ type ContentResult = {
 type PaletteEntry = Command | ContentResult;
 
 const COMMANDS: Command[] = [
+  { kind: "command", id: "home", label: "询问 Margin", detail: "回到 AI 阅读路由器", href: "/", icon: Home, keywords: "home ai router 主页 主界面 询问" },
   { kind: "command", id: "library", label: "打开书库", detail: "查看书籍与阅读进度", href: "/library", icon: Library, keywords: "library books 书库 书籍" },
   { kind: "command", id: "import", label: "导入书籍", detail: "把 EPUB 或 PDF 加入本地书库", href: "/library?import=1", icon: FileUp, keywords: "import epub pdf 导入 新书" },
   { kind: "command", id: "review", label: "开始今日复习", detail: "复习到期生词", href: "/review", icon: BrainCircuit, keywords: "review study srs 复习 学习" },
@@ -106,7 +107,7 @@ export function CommandPalette() {
 
   useEffect(() => {
     if (!open) return;
-    const background = [document.querySelector(".app-nav"), document.getElementById("main-content")].filter(Boolean) as HTMLElement[];
+    const background = [document.querySelector(".app-sidebar"), document.querySelector(".mobile-app-bar"), document.getElementById("main-content")].filter(Boolean) as HTMLElement[];
     background.forEach((element) => element.setAttribute("inert", ""));
     return () => background.forEach((element) => element.removeAttribute("inert"));
   }, [open]);

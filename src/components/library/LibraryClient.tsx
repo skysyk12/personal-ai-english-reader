@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { LearningRole } from "@/lib/types";
+import type { ReflowPolicy } from "@/lib/books/pdf-reflow-types";
 
 type LibraryBook = {
   id: string;
@@ -18,7 +19,16 @@ type LibraryBook = {
   noteCount: number;
   vocabularyCount?: number;
   last_opened_at?: string | null;
+  reflow_policy?: string | null;
+  pdf_parse_score?: number | null;
 };
+
+const POLICY_OPTIONS: Array<{ value: ReflowPolicy; label: string; rowLabel: string }> = [
+  { value: "auto", label: "自动（推荐 · 按解析质量）", rowLabel: "自动" },
+  { value: "none", label: "不重排（默认 PDF 原版阅读）", rowLabel: "不重排" },
+  { value: "local", label: "本地 OCR 重排（Tesseract.js · 不联网）", rowLabel: "本地" },
+  { value: "api", label: "云端 API 重排（PaddleOCR-VL · 中英文）", rowLabel: "云端" },
+];
 
 export function LibraryClient() {
   const router = useRouter();
@@ -29,6 +39,7 @@ export function LibraryClient() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [roleId, setRoleId] = useState("");
+  const [reflowPolicy, setReflowPolicy] = useState<ReflowPolicy>("auto");
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
@@ -85,6 +96,7 @@ export function LibraryClient() {
     const body = new FormData();
     body.set("file", file);
     if (roleId) body.set("roleId", roleId);
+    if (file.name.toLowerCase().endsWith(".pdf")) body.set("reflowPolicy", reflowPolicy);
     try {
       const response = await fetch("/api/books/import", { method: "POST", body });
       const result = await response.json();
@@ -105,6 +117,21 @@ export function LibraryClient() {
     if (!window.confirm(`删除《${book.title}》及其本地笔记和进度？此操作无法撤销。`)) return;
     const response = await fetch(`/api/books?bookId=${encodeURIComponent(book.id)}`, { method: "DELETE" });
     if (response.ok) setBooks((current) => current.filter((item) => item.id !== book.id));
+  }
+
+  async function changePolicy(book: LibraryBook, policy: ReflowPolicy) {
+    const previous = book.reflow_policy ?? "auto";
+    if (policy === previous) return;
+    // Optimistic update; revert if the server rejects the change.
+    setBooks((current) => current.map((item) => item.id === book.id ? { ...item, reflow_policy: policy } : item));
+    const response = await fetch(`/api/books/${encodeURIComponent(book.id)}/policy`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reflowPolicy: policy }),
+    });
+    if (!response.ok) {
+      setBooks((current) => current.map((item) => item.id === book.id ? { ...item, reflow_policy: previous } : item));
+    }
   }
 
   const recent = books[0];
@@ -246,7 +273,20 @@ export function LibraryClient() {
                   </Link>
                   <div className="book-row-progress"><span>{book.progress}%</span><div role="progressbar" aria-label={`${book.title} 阅读进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={book.progress}><i style={{ width: `${book.progress}%` }} /></div></div>
                   <span className="book-note-count"><NotebookPen size={14} aria-hidden="true" />{book.noteCount} · {book.vocabularyCount || 0}</span>
-                  <div className="book-row-actions"><Link className="icon-button subtle" aria-label={`继续阅读 ${book.title}`} href={`/reader/${book.id}`}><ChevronRight size={16} /></Link><button className="icon-button subtle" aria-label={`删除 ${book.title}`} onClick={() => void deleteBook(book)}><Trash2 size={15} /></button></div>
+                  <div className="book-row-actions">
+                    {book.format === "pdf" ? (
+                      <select
+                        aria-label={`${book.title} 重排策略`}
+                        className="book-policy-select"
+                        value={book.reflow_policy ?? "auto"}
+                        onChange={(event) => void changePolicy(book, event.target.value as ReflowPolicy)}
+                      >
+                        {POLICY_OPTIONS.map((option) => <option value={option.value} key={option.value}>{option.rowLabel}</option>)}
+                      </select>
+                    ) : null}
+                    <Link className="icon-button subtle" aria-label={`继续阅读 ${book.title}`} href={`/reader/${book.id}`}><ChevronRight size={16} /></Link>
+                    <button className="icon-button subtle" aria-label={`删除 ${book.title}`} onClick={() => void deleteBook(book)}><Trash2 size={15} /></button>
+                  </div>
                 </article>
               ))}
             </div> : <div className="book-search-empty"><Search size={20} /><strong>没有匹配的书籍</strong><span>换一个书名或作者关键词。</span></div>}
@@ -273,6 +313,15 @@ export function LibraryClient() {
                 {roles.map((role) => <option value={role.id} key={role.id}>{role.name}</option>)}
               </select>
             </label>
+            {file?.name.toLowerCase().endsWith(".pdf") ? (
+              <label className="field">
+                <span>重排策略</span>
+                <select name="reflow-policy" value={reflowPolicy} onChange={(event) => setReflowPolicy(event.target.value as ReflowPolicy)}>
+                  {POLICY_OPTIONS.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+                </select>
+                <small>本地 OCR 仅针对英文优化；中文扫描书建议选择云端或保持原版。策略随时可在书库中修改。</small>
+              </label>
+            ) : null}
             {error ? <p className="form-error" role="alert">{error}</p> : null}
             <div className="dialog-actions">
               <button className="button secondary" onClick={closeImportDialog}>取消</button>

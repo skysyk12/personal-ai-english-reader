@@ -1,10 +1,10 @@
 "use client";
 
-import { FileScan, LoaderCircle } from "lucide-react";
+import { AlertTriangle, FileScan, LoaderCircle, RefreshCw, ScanText } from "lucide-react";
 import Image from "next/image";
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
-import type { PdfReflowBlock, PdfReflowDocument } from "@/lib/books/pdf-reflow-types";
+import type { PdfReflowBlock, PdfReflowDocument, ReflowPolicy } from "@/lib/books/pdf-reflow-types";
 import type { ReaderAnchor, ReaderSelection } from "@/lib/types";
 import type { PdfReaderHandle } from "./PdfReader";
 
@@ -23,6 +23,7 @@ type StoredPdfHighlight = {
 type Props = {
   bookId: string;
   initialPage?: number | null;
+  reflowPolicy?: ReflowPolicy;
   fontSize: number;
   lineHeight: number;
   fontFamily: string;
@@ -34,10 +35,20 @@ type Props = {
 
 const HIGHLIGHT_NAME = "margin-pdf-reflow-highlights";
 
+function engineName(
+  provider: "PaddleOCR-VL" | "Tesseract.js" | undefined,
+  policy: ReflowPolicy | undefined,
+): string {
+  if (provider === "Tesseract.js") return "本地 Tesseract.js";
+  if (provider) return "PaddleOCR-VL";
+  return policy === "local" ? "本地 Tesseract.js" : "PaddleOCR-VL";
+}
+
 const PdfReflowReader = forwardRef<PdfReaderHandle, Props>(function PdfReflowReader(
   {
     bookId,
     initialPage,
+    reflowPolicy,
     fontSize,
     lineHeight,
     fontFamily,
@@ -53,8 +64,11 @@ const PdfReflowReader = forwardRef<PdfReaderHandle, Props>(function PdfReflowRea
   const currentPageRef = useRef(Math.max(1, initialPage || 1));
   const savedHighlightsRef = useRef<StoredPdfHighlight[]>([]);
   const [document, setDocument] = useState<PdfReflowDocument | null>(null);
-  const [status, setStatus] = useState("正在识别 PDF 图文结构并重新排版…");
+  const [status, setStatus] = useState(() => reflowPolicy === "local"
+    ? "正在分析 PDF 图文结构；扫描页将通过本地 Tesseract.js 识别（仅英文质量）…"
+    : "正在分析 PDF 图文结构；扫描页将通过 PaddleOCR-VL 自动识别中英文…");
   const [error, setError] = useState("");
+  const [revision, setRevision] = useState(0);
 
   const refreshSavedHighlights = useCallback(() => {
     const root = containerRef.current;
@@ -142,7 +156,7 @@ const PdfReflowReader = forwardRef<PdfReaderHandle, Props>(function PdfReflowRea
     async function load() {
       try {
         const [reflowResponse, highlightResponse] = await Promise.all([
-          fetch(`/api/books/${bookId}/reflow`, { signal: controller.signal }),
+          fetch(`/api/books/${bookId}/reflow${revision ? "?refresh=1" : ""}`, { signal: controller.signal }),
           fetch(`/api/highlights?bookId=${encodeURIComponent(bookId)}`, { signal: controller.signal }),
         ]);
         const reflowResult = await reflowResponse.json() as PdfReflowDocument & {
@@ -191,7 +205,7 @@ const PdfReflowReader = forwardRef<PdfReaderHandle, Props>(function PdfReflowRea
       const registry = (CSS as unknown as { highlights?: HighlightRegistry }).highlights;
       registry?.delete(HIGHLIGHT_NAME);
     };
-  }, [bookId, onDocumentReady]);
+  }, [bookId, onDocumentReady, revision]);
 
   useEffect(() => {
     if (!document || document.textPageCount === 0 || !containerRef.current) return;
@@ -259,17 +273,24 @@ const PdfReflowReader = forwardRef<PdfReaderHandle, Props>(function PdfReflowRea
   }, [initialPage, onSelection]);
 
   if (document?.textPageCount === 0) {
+    const emptyEngineName = engineName(document.ocr?.provider, reflowPolicy);
     return (
       <div className="pdf-reflow-stage">
         <div className="pdf-reflow-empty" role="status">
           <FileScan size={27} aria-hidden="true" />
-          <strong>这份 PDF 没有可重排的文字</strong>
-          <span>它可能是扫描件或图片型 PDF。目前未启用 OCR，请使用原版阅读。</span>
+          <strong>{emptyEngineName} 没有识别出可靠文字</strong>
+          <span>页面可能过于模糊、包含手写内容或缺少可解析结构，请使用 PDF 原版阅读。</span>
+          <button type="button" className="button secondary" onClick={() => { setDocument(null); setError(""); setStatus(`正在通过 ${emptyEngineName} 重新识别…`); setRevision((value) => value + 1); }}><RefreshCw size={15} />重新识别</button>
           <button type="button" className="button primary" onClick={onFallbackOriginal}>切换到 PDF 原版</button>
         </div>
       </div>
     );
   }
+
+  const recognitionRate = document
+    ? Math.round(document.textPageCount / Math.max(1, document.pageCount) * 100)
+    : 100;
+  const recognitionIsLow = recognitionRate < 35;
 
   return (
     <div className="pdf-reflow-stage">
@@ -290,13 +311,24 @@ const PdfReflowReader = forwardRef<PdfReaderHandle, Props>(function PdfReflowRea
       >
         {document ? (
           <article className="pdf-reflow-document">
+            {recognitionIsLow ? (
+              <aside className="pdf-reflow-quality" role="status">
+                <AlertTriangle size={17} aria-hidden="true" />
+                <div>
+                  <strong>这份扫描 PDF 不适合当前重排</strong>
+                  <span>仅识别出 {document.textPageCount}/{document.pageCount} 页（{recognitionRate}%）；建议使用 PDF 原版核对。</span>
+                </div>
+                <button type="button" onClick={onFallbackOriginal}>使用原版</button>
+              </aside>
+            ) : null}
             <header className="pdf-reflow-intro">
-              <span>Living reflow · {document.imageCount} images</span>
-              <p>文字与文章配图已按原页位置重建阅读顺序。遇到表格或复杂版式时，可随时切换至 PDF 原版核对。</p>
+              <span>Living reflow · {document.imageCount} images · {document.ocrPageCount} OCR pages · {document.tableCount} tables</span>
+              <p>{document.ocrPageCount ? `扫描页已由 ${document.ocr?.model || engineName(document.ocr?.provider, reflowPolicy)} 完成${document.ocr?.provider === "Tesseract.js" ? "英文" : "中英文"}识别，` : ""}文字、多栏、表格、配图与图注已按阅读顺序重建；复杂关系仍可切换原版核对。</p>
+              <button type="button" className="text-button reflow-refresh" onClick={() => { setDocument(null); setError(""); setStatus(`正在通过 ${engineName(document.ocr?.provider, reflowPolicy)} 重新分析 PDF…`); setRevision((value) => value + 1); }}><RefreshCw size={13} />重新识别</button>
             </header>
             {document.pages.map((page) => (
               <section className="pdf-reflow-page" data-pdf-page={page.pageNumber} aria-label={`第 ${page.pageNumber} 页`} key={page.pageNumber}>
-                <div className="pdf-reflow-page-label" aria-hidden="true"><span>Page</span><strong>{page.pageNumber}</strong></div>
+                <div className="pdf-reflow-page-label" aria-hidden="true"><span>Page</span><strong>{page.pageNumber}</strong>{page.analysis.source === "ocr" ? <small><ScanText size={11} />{document.ocr?.provider === "Tesseract.js" ? "本地 OCR" : "Paddle OCR"}</small> : page.analysis.columnCount > 1 ? <small>{page.analysis.columnCount} columns</small> : null}</div>
                 <div className="pdf-reflow-content">
                   {page.blocks.length
                     ? page.blocks.map((block) => <ReflowBlock block={block} priority={page.pageNumber === (initialPage || 1)} key={block.id} />)
@@ -322,6 +354,19 @@ const PdfReflowReader = forwardRef<PdfReaderHandle, Props>(function PdfReflowRea
 export default PdfReflowReader;
 
 function ReflowBlock({ block, priority = false }: { block: PdfReflowBlock; priority?: boolean }) {
+  if (block.kind === "table") {
+    const columnCount = Math.max(1, ...block.rows.map((row) => row.length));
+    return (
+      <div className="pdf-reflow-table-wrap" data-reflow-block tabIndex={0} role="region" aria-label="PDF 表格">
+        <table><tbody>{block.rows.map((row, rowIndex) => <tr key={`${block.id}-row-${rowIndex}`}>{row.map((cell, cellIndex) => {
+          const colSpan = cellIndex === row.length - 1 ? columnCount - row.length + 1 : 1;
+          return rowIndex === 0
+            ? <th scope="col" colSpan={colSpan} key={`${block.id}-${rowIndex}-${cellIndex}`}>{cell}</th>
+            : <td colSpan={colSpan} key={`${block.id}-${rowIndex}-${cellIndex}`}>{cell}</td>;
+        })}</tr>)}</tbody></table>
+      </div>
+    );
+  }
   if (block.kind === "image") {
     const width = Math.min(100, Math.max(26, block.layout.width / 0.74 * 100));
     const alignment = block.layout.left > 0.48
@@ -331,7 +376,7 @@ function ReflowBlock({ block, priority = false }: { block: PdfReflowBlock; prior
         : "center";
     return (
       <figure
-        className="pdf-reflow-figure"
+        className={`pdf-reflow-figure ${block.role === "page-scan" ? "is-page-scan" : ""}`}
         style={{
           "--reflow-image-width": `${width}%`,
           "--reflow-image-align": alignment,
@@ -347,11 +392,13 @@ function ReflowBlock({ block, priority = false }: { block: PdfReflowBlock; prior
           fetchPriority={priority ? "high" : "auto"}
           unoptimized
         />
+        {block.role === "page-scan" ? <figcaption>扫描页原图 · OCR 文字位于下方</figcaption> : null}
       </figure>
     );
   }
   if (block.kind === "heading") return <h2 data-reflow-block>{block.text}</h2>;
   if (block.kind === "list-item") return <p className="pdf-reflow-list-item" data-reflow-block>{block.text}</p>;
+  if (block.kind === "caption") return <p className="pdf-reflow-caption" data-reflow-block>{block.text}</p>;
   return <p data-reflow-block>{block.text}</p>;
 }
 

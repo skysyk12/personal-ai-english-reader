@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "pdfjs-dist/web/pdf_viewer.css";
 import "./globals.css";
 
-import { AppNav } from "@/components/layout/AppNav";
+import { AppFrame } from "@/components/layout/AppNav";
 import { CommandPalette } from "@/components/layout/CommandPalette";
 
 export const metadata: Metadata = {
@@ -33,8 +33,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <head><script dangerouslySetInnerHTML={{ __html: themeBoot }} /></head>
       <body>
         <a className="skip-link" href="#main-content">跳到主要内容</a>
-        <AppNav />
-        <main id="main-content">{children}</main>
+        <AppFrame>{children}</AppFrame>
         <CommandPalette />
       </body>
     </html>

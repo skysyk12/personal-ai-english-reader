@@ -14,6 +14,11 @@ export const books = sqliteTable("books", {
     .default("importing"),
   pdfParseScore: integer("pdf_parse_score"),
   pdfDefaultMode: text("pdf_default_mode", { enum: ["reflow", "original"] }),
+  reflowPolicy: text("reflow_policy", {
+    enum: ["auto", "none", "local", "api"],
+  })
+    .notNull()
+    .default("auto"),
   totalLocations: integer("total_locations"),
   defaultRoleId: text("default_role_id"),
   createdAt: text("created_at").notNull(),
@@ -164,7 +169,48 @@ export const searchDocuments = sqliteTable("search_documents", {
   updatedAt: text("updated_at").notNull(),
 });
 
+export const learningGoals = sqliteTable("learning_goals", {
+  id: text("id").primaryKey(),
+  metric: text("metric", {
+    enum: ["reading_minutes", "review_count", "new_words"],
+  }).notNull().unique(),
+  targetValue: integer("target_value").notNull(),
+  period: text("period", { enum: ["weekly"] }).notNull().default("weekly"),
+  isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const agentRuns = sqliteTable("agent_runs", {
+  id: text("id").primaryKey(),
+  query: text("query").notNull(),
+  intent: text("intent").notNull(),
+  toolName: text("tool_name").notNull(),
+  routedBy: text("routed_by", { enum: ["local", "model", "fallback"] }).notNull(),
+  status: text("status", { enum: ["completed", "failed"] }).notNull(),
+  outputJson: text("output_json").notNull().default("{}"),
+  error: text("error"),
+  durationMs: integer("duration_ms").notNull().default(0),
+  createdAt: text("created_at").notNull(),
+});
+
+export const agentSessions = sqliteTable("agent_sessions", {
+  id: text("id").primaryKey(),
+  query: text("query").notNull(),
+  title: text("title").notNull(),
+  bookId: text("book_id"),
+  totalMinutes: integer("total_minutes").notNull(),
+  currentStep: integer("current_step").notNull().default(0),
+  status: text("status", { enum: ["active", "completed", "dismissed"] }).notNull(),
+  stepsJson: text("steps_json").notNull().default("[]"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export type Book = typeof books.$inferSelect;
 export type LearningRoleRow = typeof learningRoles.$inferSelect;
 export type NoteRow = typeof notes.$inferSelect;
 export type VocabularyRow = typeof vocabulary.$inferSelect;
+export type LearningGoalRow = typeof learningGoals.$inferSelect;
+export type AgentRunRow = typeof agentRuns.$inferSelect;
+export type AgentSessionRow = typeof agentSessions.$inferSelect;

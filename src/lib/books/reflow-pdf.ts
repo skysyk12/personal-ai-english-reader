@@ -12,6 +12,7 @@ import type {
   PdfReflowImageBlock,
   PdfReflowLayout,
   PdfReflowPage,
+  PdfReflowTableBlock,
   PdfReflowTextBlock,
 } from "@/lib/books/pdf-reflow-types";
 import { withPdfDocument } from "@/lib/books/pdf-server";
@@ -24,13 +25,14 @@ type TextItemLike = {
   fontName: string;
 };
 
-type PositionedText = {
+export type PositionedText = {
   text: string;
   x: number;
   y: number;
   width: number;
   fontSize: number;
   bold: boolean;
+  confidence?: number;
 };
 
 type TextLine = PositionedText;
@@ -39,7 +41,8 @@ type ExtractedImage = PdfReflowImageBlock;
 
 type LayoutItem =
   | { type: "line"; line: TextLine; layout: PdfReflowLayout }
-  | { type: "image"; image: ExtractedImage; layout: PdfReflowLayout };
+  | { type: "image"; image: ExtractedImage; layout: PdfReflowLayout }
+  | { type: "table"; table: PdfReflowTableBlock; layout: PdfReflowLayout };
 
 type Matrix = [number, number, number, number, number, number];
 
@@ -59,9 +62,10 @@ type ReflowOptions = {
   assetUrlBase: string;
 };
 
-const CACHE_VERSION = 6 as const;
+const CACHE_VERSION = 8 as const;
 const LIST_PATTERN = /^(?:[•◦▪–—-]|\d+[.)]|[A-Za-z][.)])\s+/;
 const CJK_PATTERN = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff]/;
+const CAPTION_PATTERN = /^(?:fig(?:ure)?\.?|table|source|photo|illustration|chart|map|图|表)\s*[\d.:：-]*/i;
 const IDENTITY_MATRIX: Matrix = [1, 0, 0, 1, 0, 0];
 
 export async function extractPdfReflow(
@@ -76,11 +80,14 @@ export async function extractPdfReflow(
       version: CACHE_VERSION,
       generatedAt: new Date().toISOString(),
       pageCount: document.numPages,
-      textPageCount: pages.filter((page) => page.blocks.some((block) => block.kind !== "image")).length,
+      textPageCount: pages.filter((page) => page.analysis.source !== "image-only").length,
+      ocrPageCount: 0,
       imageCount: pages.reduce(
         (total, page) => total + page.blocks.filter((block) => block.kind === "image").length,
         0,
       ),
+      tableCount: pages.reduce((total, page) => total + page.analysis.tableCount, 0),
+      captionCount: pages.reduce((total, page) => total + page.analysis.captionCount, 0),
       pages,
     };
   });
@@ -139,18 +146,104 @@ async function extractPage(
       } satisfies PositionedText];
     });
 
-    if (!items.length) return { pageNumber, blocks: images };
+    const source: PdfReflowPage["analysis"]["source"] = "native";
+    const confidence: number | null = null;
+
+    if (!items.length) {
+      return {
+        pageNumber,
+        blocks: images,
+        analysis: {
+          source: "image-only",
+          confidence,
+          columnCount: 0,
+          tableCount: 0,
+          captionCount: 0,
+        },
+      };
+    }
 
     const medianFontSize = weightedMedianFontSize(items) || 12;
     const lines = buildLines(items);
-    const layoutItems = orderPageContent(lines, images, viewport.width, viewport.height);
+    const tableResult = extractTables(lines, viewport.width, viewport.height, pageNumber, medianFontSize);
+    const layoutResult = orderPageContent(
+      tableResult.lines,
+      images,
+      tableResult.tables,
+      viewport.width,
+      viewport.height,
+    );
+    const blocks = buildBlocks(layoutResult.items, medianFontSize, pageNumber);
     return {
       pageNumber,
-      blocks: buildBlocks(layoutItems, medianFontSize, pageNumber),
+      blocks,
+      analysis: {
+        source,
+        confidence,
+        columnCount: layoutResult.columnCount,
+        tableCount: blocks.filter((block) => block.kind === "table").length,
+        captionCount: blocks.filter((block) => block.kind === "caption").length,
+      },
     };
   } finally {
     page.cleanup();
   }
+}
+
+// Shared by the OCR engines: turn positioned words (with optional confidence)
+// into reflow blocks through the same layout chain as native text pages.
+export function buildReflowPageFromWords(input: {
+  pageNumber: number;
+  items: PositionedText[];
+  images: PdfReflowImageBlock[];
+  pageWidth: number;
+  pageHeight: number;
+}): { blocks: PdfReflowBlock[]; columnCount: number } {
+  if (!input.items.length) return { blocks: input.images, columnCount: 0 };
+  const medianFontSize = weightedMedianFontSize(input.items) || 12;
+  const lines = buildLines(input.items);
+  const tableResult = extractTables(
+    lines,
+    input.pageWidth,
+    input.pageHeight,
+    input.pageNumber,
+    medianFontSize,
+  );
+  const layoutResult = orderPageContent(
+    tableResult.lines,
+    input.images,
+    tableResult.tables,
+    input.pageWidth,
+    input.pageHeight,
+  );
+  const blocks = buildBlocks(layoutResult.items, medianFontSize, input.pageNumber);
+  return { blocks, columnCount: layoutResult.columnCount };
+}
+
+// Engine-agnostic version of the former mergePaddleOcrPages: replace only the
+// image-only pages of a native document with OCR output, keeping native pages.
+export function mergeOcrPages(
+  nativeDocument: PdfReflowDocument,
+  ocrDocument: PdfReflowDocument,
+): PdfReflowDocument {
+  const pages = nativeDocument.pages.map((page, index) => {
+    if (page.analysis.source !== "image-only") return page;
+    return ocrDocument.pages[index] ?? page;
+  });
+  return {
+    ...nativeDocument,
+    generatedAt: new Date().toISOString(),
+    textPageCount: pages.filter((page) => page.analysis.source !== "image-only").length,
+    ocrPageCount: pages.filter((page) => page.analysis.source === "ocr").length,
+    imageCount: pages.reduce(
+      (total, page) => total + page.blocks.filter((block) => block.kind === "image").length,
+      0,
+    ),
+    tableCount: pages.reduce((total, page) => total + page.analysis.tableCount, 0),
+    captionCount: pages.reduce((total, page) => total + page.analysis.captionCount, 0),
+    ocr: ocrDocument.ocr,
+    pages,
+  };
 }
 
 async function extractPageImages(
@@ -331,12 +424,121 @@ function joinLine(items: PositionedText[]): TextLine {
   };
 }
 
+function extractTables(
+  lines: TextLine[],
+  pageWidth: number,
+  pageHeight: number,
+  pageNumber: number,
+  medianFontSize: number,
+) {
+  const topOf = (line: TextLine) => pageHeight - line.y - line.fontSize;
+  const ordered = lines.toSorted((left, right) => topOf(left) - topOf(right) || left.x - right.x);
+  const rows: TextLine[][] = [];
+  for (const line of ordered) {
+    const row = rows.at(-1);
+    const reference = row?.[0];
+    const tolerance = Math.max(3, medianFontSize * 0.45, line.fontSize * 0.18, (reference?.fontSize || 0) * 0.18);
+    if (!row || !reference || Math.abs(topOf(reference) - topOf(line)) > tolerance) rows.push([line]);
+    else row.push(line);
+  }
+
+  const tables: PdfReflowTableBlock[] = [];
+  const tableSourceRows = new Map<PdfReflowTableBlock, TextLine[][]>();
+  const used = new Set<TextLine>();
+  let working: TextLine[][] = [];
+
+  const flush = () => {
+    if (!working.length) return;
+    const columnCount = Math.max(...working.map((row) => row.length));
+    const validLength = working.length >= 3 || (working.length >= 2 && columnCount >= 3);
+    const averageCellWidth = working.flat().reduce((total, line) => total + line.width / pageWidth, 0)
+      / working.flat().length;
+    if (validLength && (columnCount >= 3 || averageCellWidth < 0.22)) {
+      const tableLines = working.flat();
+      const layouts = tableLines.map((line) => lineLayout(line, pageWidth, pageHeight));
+      const table: PdfReflowTableBlock = {
+        id: `pdf-page-${pageNumber}-table-${tables.length + 1}`,
+        kind: "table",
+        rows: working.map((row) => row.toSorted((left, right) => left.x - right.x).map((line) => line.text)),
+        layout: layouts.reduce(unionLayouts),
+      };
+      tables.push(table);
+      tableSourceRows.set(table, working.map((row) => [...row]));
+      tableLines.forEach((line) => used.add(line));
+    }
+    working = [];
+  };
+
+  for (const row of rows) {
+    const cells = row.toSorted((left, right) => left.x - right.x);
+    const averageLength = cells.reduce((total, line) => total + line.text.length, 0) / cells.length;
+    const width = cells.at(-1)!.x + cells.at(-1)!.width - cells[0].x;
+    const isCandidate = cells.length >= 2
+      && cells.length <= 8
+      && averageLength <= 46
+      && width >= pageWidth * 0.24;
+    const previous = working.at(-1);
+    const verticalGap = previous
+      ? Math.abs(topOf(previous[0]) - topOf(cells[0]))
+      : 0;
+    const rowFontSize = Math.max(
+      ...cells.map((cell) => cell.fontSize),
+      ...(previous?.map((cell) => cell.fontSize) || [0]),
+    );
+    if (!isCandidate || (previous && (
+      verticalGap > Math.max(medianFontSize * 5.4, rowFontSize * 3.2)
+      || !tableAnchorsMatch(previous, cells, pageWidth)
+    ))) {
+      flush();
+    }
+    if (isCandidate) working.push(cells);
+  }
+  flush();
+
+  for (const table of tables) {
+    const sourceRows = tableSourceRows.get(table);
+    const firstRow = sourceRows?.[0];
+    if (!firstRow) continue;
+    const firstFontSize = firstRow.reduce((total, line) => total + line.fontSize, 0) / firstRow.length;
+    const header = rows
+      .filter((row) => row.length >= 2 && row.every((line) => !used.has(line)))
+      .filter((row) => topOf(row[0]) < topOf(firstRow[0]) && tableAnchorsMatch(row, firstRow, pageWidth))
+      .filter((row) => {
+        const gap = topOf(firstRow[0]) - topOf(row[0]);
+        const fontSize = row.reduce((total, line) => total + line.fontSize, 0) / row.length;
+        return gap <= Math.max(medianFontSize * 7, fontSize * 3.2)
+          && (fontSize >= firstFontSize * 1.12 || row.filter((line) => line.bold).length >= Math.ceil(row.length / 2));
+      })
+      .toSorted((left, right) => topOf(right[0]) - topOf(left[0]))
+      .at(0);
+    if (!header) continue;
+    table.rows.unshift(header.toSorted((left, right) => left.x - right.x).map((line) => line.text));
+    table.layout = header.map((line) => lineLayout(line, pageWidth, pageHeight)).reduce(
+      unionLayouts,
+      table.layout,
+    );
+    header.forEach((line) => used.add(line));
+  }
+  return { lines: lines.filter((line) => !used.has(line)), tables };
+}
+
+function tableAnchorsMatch(left: TextLine[], right: TextLine[], pageWidth: number) {
+  if (Math.abs(left.length - right.length) > 1) return false;
+  const count = Math.min(left.length, right.length);
+  let difference = 0;
+  for (let index = 0; index < count; index += 1) {
+    difference += Math.abs(left[index].x - right[index].x) / pageWidth;
+  }
+  return difference / count <= 0.075;
+}
+
 function orderPageContent(
   lines: TextLine[],
   images: ExtractedImage[],
+  tables: PdfReflowTableBlock[],
   pageWidth: number,
   pageHeight: number,
-): LayoutItem[] {
+) {
   const lineItems: LayoutItem[] = lines.map((line) => ({
     type: "line",
     line,
@@ -347,59 +549,124 @@ function orderPageContent(
     image,
     layout: image.layout,
   }));
-  const all = [...lineItems, ...imageItems];
-  const byPosition = (values: LayoutItem[]) => values.toSorted((left, right) => (
-    left.layout.top - right.layout.top || left.layout.left - right.layout.left
-  ));
-  if (lines.length < 8) return byPosition(all);
+  const tableItems: LayoutItem[] = tables.map((table) => ({
+    type: "table",
+    table,
+    layout: table.layout,
+  }));
+  const all = [...lineItems, ...imageItems, ...tableItems];
+  if (lineItems.length < 8) return { items: byPosition(all), columnCount: 1 };
 
-  const pageLeft = Math.min(...lines.map((line) => line.x));
-  const pageRight = Math.max(...lines.map((line) => line.x + line.width));
-  const contentWidth = pageRight - pageLeft;
-  if (contentWidth < 180) return byPosition(all);
-
-  const midpoint = (pageLeft + contentWidth / 2) / pageWidth;
-  const wideThreshold = contentWidth * 0.58 / pageWidth;
-  const narrowLines = lineItems.filter((item) => item.layout.width < wideThreshold);
-  const leftLines = narrowLines.filter((item) => center(item.layout) < midpoint);
-  const rightLines = narrowLines.filter((item) => center(item.layout) >= midpoint);
-  if (leftLines.length < 4 || rightLines.length < 4 || narrowLines.length < lines.length * 0.45) {
-    return byPosition(all);
-  }
-
-  const narrowItems = all.filter((item) => item.layout.width < wideThreshold);
-  const separators = all
-    .filter((item) => item.layout.width >= wideThreshold)
-    .toSorted((left, right) => left.layout.top - right.layout.top);
+  const separators = all.filter((item) => (
+    item.type === "table"
+    || item.layout.width >= 0.58
+    || (item.type === "image" && item.layout.width >= 0.48)
+  )).toSorted((left, right) => left.layout.top - right.layout.top);
+  const narrowItems = all.filter((item) => !separators.includes(item));
   const output: LayoutItem[] = [];
   const used = new Set<LayoutItem>();
   let topBoundary = Number.NEGATIVE_INFINITY;
+  let columnCount = 1;
 
   for (const separator of separators) {
     const band = narrowItems.filter((item) => (
       !used.has(item) && item.layout.top >= topBoundary && item.layout.top < separator.layout.top
     ));
-    output.push(...orderColumnBand(band, midpoint));
+    const ordered = orderColumnBand(band);
+    output.push(...ordered.items, separator);
+    columnCount = Math.max(columnCount, ordered.columnCount);
     band.forEach((item) => used.add(item));
-    output.push(separator);
     used.add(separator);
     topBoundary = separator.layout.top;
   }
-  output.push(...orderColumnBand(
-    narrowItems.filter((item) => !used.has(item)),
-    midpoint,
-  ));
-  return output;
+  const tail = orderColumnBand(narrowItems.filter((item) => !used.has(item)));
+  output.push(...tail.items);
+  columnCount = Math.max(columnCount, tail.columnCount);
+  return { items: output, columnCount };
 }
 
-function orderColumnBand(items: LayoutItem[], midpoint: number) {
-  const byTop = (values: LayoutItem[]) => values.toSorted((left, right) => (
+function orderColumnBand(items: LayoutItem[]) {
+  if (items.length < 6) return { items: byPosition(items), columnCount: 1 };
+  const boundaries = detectColumnBoundaries(items);
+  if (!boundaries.length) return { items: byPosition(items), columnCount: 1 };
+  const columns: LayoutItem[][] = Array.from({ length: boundaries.length + 1 }, () => []);
+  const spanning: LayoutItem[] = [];
+  for (const item of items) {
+    const crossed = boundaries.filter((boundary) => (
+      item.layout.left < boundary - 0.012
+      && item.layout.left + item.layout.width > boundary + 0.012
+    ));
+    if (crossed.length && item.layout.width > 0.38) {
+      spanning.push(item);
+      continue;
+    }
+    const index = boundaries.filter((boundary) => center(item.layout) > boundary).length;
+    columns[index].push(item);
+  }
+  if (columns.filter((column) => column.length >= 2).length < 2) {
+    return { items: byPosition(items), columnCount: 1 };
+  }
+  if (!spanning.length) {
+    return { items: columns.flatMap(byPosition), columnCount: columns.length };
+  }
+
+  const ordered: LayoutItem[] = [];
+  let top = Number.NEGATIVE_INFINITY;
+  for (const separator of byPosition(spanning)) {
+    for (const column of columns) {
+      ordered.push(...byPosition(column.filter((item) => item.layout.top >= top && item.layout.top < separator.layout.top)));
+    }
+    ordered.push(separator);
+    top = separator.layout.top;
+  }
+  for (const column of columns) ordered.push(...byPosition(column.filter((item) => item.layout.top >= top)));
+  return { items: ordered, columnCount: columns.length };
+}
+
+function detectColumnBoundaries(items: LayoutItem[]) {
+  const lineItems = items.filter((item) => item.type === "line");
+  if (lineItems.length < 6) return [];
+  const left = Math.min(...lineItems.map((item) => item.layout.left));
+  const right = Math.max(...lineItems.map((item) => item.layout.left + item.layout.width));
+  if (right - left < 0.42) return [];
+  const threshold = Math.max(1, Math.floor(lineItems.length * 0.055));
+  const samples = Array.from({ length: 81 }, (_, index) => 0.1 + index * 0.01)
+    .filter((x) => x > left + 0.1 && x < right - 0.1)
+    .map((x) => ({
+      x,
+      coverage: lineItems.filter((item) => item.layout.left < x && item.layout.left + item.layout.width > x).length,
+    }));
+  const gaps: Array<Array<{ x: number; coverage: number }>> = [];
+  for (const sample of samples) {
+    if (sample.coverage <= threshold) {
+      const current = gaps.at(-1);
+      if (current && sample.x - current.at(-1)!.x <= 0.011) current.push(sample);
+      else gaps.push([sample]);
+    }
+  }
+  const candidates = gaps
+    .filter((gap) => gap.length >= 3)
+    .map((gap) => ({
+      x: gap[Math.floor(gap.length / 2)].x,
+      score: gap.reduce((total, sample) => total + sample.coverage, 0) / gap.length,
+    }))
+    .toSorted((a, b) => a.score - b.score || a.x - b.x);
+  const selected: number[] = [];
+  for (const candidate of candidates) {
+    const boundaries = [...selected, candidate.x].toSorted((a, b) => a - b);
+    const edges = [left, ...boundaries, right];
+    if (edges.every((edge, index) => index === 0 || edge - edges[index - 1] >= 0.14)) {
+      selected.push(candidate.x);
+      if (selected.length === 3) break;
+    }
+  }
+  return selected.toSorted((a, b) => a - b);
+}
+
+function byPosition(values: LayoutItem[]) {
+  return values.toSorted((left, right) => (
     left.layout.top - right.layout.top || left.layout.left - right.layout.left
   ));
-  return [
-    ...byTop(items.filter((item) => center(item.layout) < midpoint)),
-    ...byTop(items.filter((item) => center(item.layout) >= midpoint)),
-  ];
 }
 
 function buildBlocks(
@@ -413,18 +680,25 @@ function buildBlocks(
     firstLine: TextLine;
     lastLine: TextLine;
     layout: PdfReflowLayout;
+    fontSize: number;
   };
-  const output: Array<WorkingBlock | ExtractedImage> = [];
+  const output: Array<WorkingBlock | ExtractedImage | PdfReflowTableBlock> = [];
 
   for (const item of items) {
     if (item.type === "image") {
       output.push(item.image);
       continue;
     }
+    if (item.type === "table") {
+      output.push(item.table);
+      continue;
+    }
     const { line, layout } = item;
     const kind = classifyLine(line, medianFontSize);
     const previous = output.at(-1);
-    const previousText = previous && previous.kind !== "image" ? previous : null;
+    const previousText = previous && previous.kind !== "image" && previous.kind !== "table"
+      ? previous
+      : null;
     const verticalGap = previousText
       ? Math.max(0, previousText.lastLine.y - line.y)
       : Number.POSITIVE_INFINITY;
@@ -447,14 +721,33 @@ function buildBlocks(
         : joinWrappedLines(previousText.text, line.text);
       previousText.lastLine = line;
       previousText.layout = unionLayouts(previousText.layout, layout);
+      previousText.fontSize = Math.max(previousText.fontSize, line.fontSize);
     } else {
-      output.push({ kind, text: line.text, firstLine: line, lastLine: line, layout });
+      output.push({ kind, text: line.text, firstLine: line, lastLine: line, layout, fontSize: line.fontSize });
+    }
+  }
+
+  for (let index = 0; index < output.length; index += 1) {
+    const block = output[index];
+    if (block.kind === "image" || block.kind === "table" || block.kind !== "paragraph") continue;
+    const previous = output[index - 1];
+    const next = output[index + 1];
+    const adjacentImage = previous?.kind === "image"
+      ? previous
+      : next?.kind === "image"
+        ? next
+        : null;
+    const namedCaption = CAPTION_PATTERN.test(block.text);
+    const looksLikeCaption = namedCaption
+      || (block.fontSize <= medianFontSize * 0.84 && block.text.length <= 260);
+    if (namedCaption || (adjacentImage && looksLikeCaption && layoutsAreNear(block.layout, adjacentImage.layout))) {
+      block.kind = "caption";
     }
   }
 
   let textIndex = 0;
   return output.flatMap((block): PdfReflowBlock[] => {
-    if (block.kind === "image") return [block];
+    if (block.kind === "image" || block.kind === "table") return [block];
     if (!block.text) return [];
     textIndex += 1;
     return [{
@@ -464,6 +757,19 @@ function buildBlocks(
       layout: block.layout,
     } satisfies PdfReflowTextBlock];
   });
+}
+
+function layoutsAreNear(left: PdfReflowLayout, right: PdfReflowLayout) {
+  const verticalGap = Math.max(
+    0,
+    Math.max(left.top, right.top) - Math.min(left.top + left.height, right.top + right.height),
+  );
+  const overlap = Math.max(
+    0,
+    Math.min(left.left + left.width, right.left + right.width) - Math.max(left.left, right.left),
+  );
+  const minimumWidth = Math.max(0.01, Math.min(left.width, right.width));
+  return verticalGap <= 0.055 && overlap / minimumWidth >= 0.2;
 }
 
 function classifyLine(line: TextLine, medianFontSize: number): PdfReflowBlockKind {

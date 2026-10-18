@@ -1,13 +1,13 @@
 "use client";
 
 import clsx from "clsx";
-import { ArrowLeft, BookMarked, BookOpenText, Bot, Check, ChevronDown, Highlighter, Menu, MessageSquareText, NotebookPen, PanelLeftClose, PanelRightClose, Search, Settings2, Sparkles, TextCursorInput, X } from "lucide-react";
+import { ArrowLeft, BookMarked, BookOpenText, Bot, Check, ChevronDown, FileText, Highlighter, Menu, MessageSquareText, NotebookPen, PanelLeftClose, PanelRightClose, ScanText, Search, Settings2, Sparkles, TextCursorInput, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { AiPanel } from "@/components/ai/AiPanel";
-import type { PdfViewMode } from "@/lib/books/pdf-reflow-types";
+import type { PdfViewMode, ReflowPolicy } from "@/lib/books/pdf-reflow-types";
 import type { AiAction, LearningRole, ReaderSelection } from "@/lib/types";
 import type { NavItem } from "epubjs";
 import type { EpubReaderHandle, ReaderFlowMode } from "./EpubReader";
@@ -36,12 +36,21 @@ type BookData = {
   epubCfi: string | null;
   pdfPage: number | null;
   pdfDefaultMode: PdfViewMode | null;
+  reflowPolicy: ReflowPolicy;
   totalLocations: number | null;
   percentage: number;
   roleId: string;
 };
 
-export function ReaderWorkspace({ book, roles }: { book: BookData; roles: LearningRole[] }) {
+export function ReaderWorkspace({
+  book,
+  roles,
+  initialAgentAction,
+}: {
+  book: BookData;
+  roles: LearningRole[];
+  initialAgentAction?: Extract<AiAction, "summary" | "vocabulary" | "review">;
+}) {
   const [tocOpen, setTocOpen] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -63,6 +72,7 @@ export function ReaderWorkspace({ book, roles }: { book: BookData; roles: Learni
   const readerRef = useRef<EpubReaderHandle>(null);
   const pdfReaderRef = useRef<PdfReaderHandle>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initialAgentActionHandled = useRef(false);
   const progressRef = useRef(progress);
   const currentRole = roles.find((role) => role.id === roleId) ?? roles[0];
   const isStudyContext = selection?.sourceKey.includes("-study:") ?? false;
@@ -222,6 +232,31 @@ export function ReaderWorkspace({ book, roles }: { book: BookData; roles: Learni
     setAiOpen(true);
   }
 
+  useEffect(() => {
+    if (!initialAgentAction || initialAgentActionHandled.current) return;
+    let attempts = 0;
+    const openRequestedAction = () => {
+      const nextSelection = book.format === "epub"
+        ? readerRef.current?.getStudyContext()
+        : pdfReaderRef.current?.getStudyContext();
+      attempts += 1;
+      if (!nextSelection) return attempts >= 30;
+      initialAgentActionHandled.current = true;
+      setSelection(nextSelection);
+      setAction(initialAgentAction);
+      setAiOpen(true);
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.delete("agent");
+      window.history.replaceState(window.history.state, "", `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+      return true;
+    };
+    if (openRequestedAction()) return;
+    const timer = window.setInterval(() => {
+      if (openRequestedAction()) window.clearInterval(timer);
+    }, 350);
+    return () => window.clearInterval(timer);
+  }, [book.format, initialAgentAction]);
+
   function toggleAiPanel() {
     if (aiOpen) {
       setAiOpen(false);
@@ -310,11 +345,35 @@ export function ReaderWorkspace({ book, roles }: { book: BookData; roles: Learni
       <h1 className="visually-hidden">{book.title}</h1>
       <header className="reader-topbar">
         <div className="reader-book-identity">
-          <Link href="/library" className="icon-button" aria-label="返回书库"><ArrowLeft size={17} /></Link>
+          <Link href="/" className="icon-button" aria-label="返回主界面"><ArrowLeft size={17} /></Link>
           <button className="icon-button" aria-label={tocOpen ? `关闭${book.format === "pdf" ? "页码" : "目录"}` : `打开${book.format === "pdf" ? "页码" : "目录"}`} onClick={() => setTocOpen((open) => !open)}>{tocOpen ? <PanelLeftClose size={17} /> : <Menu size={17} />}</button>
           <span><strong>{book.title}</strong><small>{book.author}</small></span>
         </div>
         <div className="reader-actions">
+          {book.format === "pdf" ? (
+            <div className="reader-pdf-mode" role="group" aria-label="PDF 阅读模式">
+              <button
+                type="button"
+                aria-label="切换到图文重排"
+                aria-pressed={pdfViewMode === "reflow"}
+                className={pdfViewMode === "reflow" ? "is-active" : ""}
+                onClick={() => changePdfViewMode("reflow")}
+              >
+                <ScanText size={14} aria-hidden="true" />
+                <span>图文重排</span>
+              </button>
+              <button
+                type="button"
+                aria-label="切换到 PDF 原版"
+                aria-pressed={pdfViewMode === "original"}
+                className={pdfViewMode === "original" ? "is-active" : ""}
+                onClick={() => changePdfViewMode("original")}
+              >
+                <FileText size={14} aria-hidden="true" />
+                <span>PDF 原版</span>
+              </button>
+            </div>
+          ) : null}
           <label className="role-switcher">
             <Sparkles size={14} aria-hidden="true" />
             <span className="visually-hidden">当前学习角色</span>
@@ -346,6 +405,7 @@ export function ReaderWorkspace({ book, roles }: { book: BookData; roles: Learni
             ref={pdfReaderRef}
             bookId={book.id}
             initialPage={pdfPage}
+            reflowPolicy={book.reflowPolicy}
             fontSize={fontSize}
             lineHeight={lineHeight}
             fontFamily={fontFamily}

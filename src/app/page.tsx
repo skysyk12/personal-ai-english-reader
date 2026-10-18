@@ -1,5 +1,6 @@
-import { redirect } from "next/navigation";
+import { AgentHome } from "@/components/agent/AgentHome";
+import { getAgentSnapshot } from "@/lib/agent/context";
 
 export default function Home() {
-  redirect("/library");
+  return <AgentHome initialSnapshot={getAgentSnapshot()} />;
 }

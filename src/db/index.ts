@@ -11,6 +11,17 @@ import * as schema from "./schema";
 type NativeDatabase = InstanceType<typeof Database>;
 type OrmDatabase = BetterSQLite3Database<typeof schema>;
 
+// CREATE TABLE IF NOT EXISTS only covers fresh databases; columns added in
+// later versions need this idempotent ALTER TABLE path for existing installs.
+function ensureBookColumns(connection: NativeDatabase) {
+  const columns = connection.prepare("PRAGMA table_info(books)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "reflow_policy")) {
+    connection.exec(
+      "ALTER TABLE books ADD COLUMN reflow_policy TEXT NOT NULL DEFAULT 'auto' CHECK (reflow_policy IN ('auto','none','local','api'))",
+    );
+  }
+}
+
 let nativeDatabase: NativeDatabase | null = null;
 let ormDatabase: OrmDatabase | null = null;
 
@@ -37,6 +48,7 @@ function initializeDatabase(): { sqlite: NativeDatabase; db: OrmDatabase } {
     import_status TEXT NOT NULL DEFAULT 'importing',
     pdf_parse_score INTEGER,
     pdf_default_mode TEXT,
+    reflow_policy TEXT NOT NULL DEFAULT 'auto' CHECK (reflow_policy IN ('auto','none','local','api')),
     total_locations INTEGER,
     default_role_id TEXT,
     created_at TEXT NOT NULL,
@@ -169,6 +181,39 @@ function initializeDatabase(): { sqlite: NativeDatabase; db: OrmDatabase } {
     updated_at TEXT NOT NULL,
     UNIQUE(book_id, source_type, location_key)
   );
+  CREATE TABLE IF NOT EXISTS learning_goals (
+    id TEXT PRIMARY KEY,
+    metric TEXT NOT NULL UNIQUE,
+    target_value INTEGER NOT NULL,
+    period TEXT NOT NULL DEFAULT 'weekly',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS agent_runs (
+    id TEXT PRIMARY KEY,
+    query TEXT NOT NULL,
+    intent TEXT NOT NULL,
+    tool_name TEXT NOT NULL,
+    routed_by TEXT NOT NULL,
+    status TEXT NOT NULL,
+    output_json TEXT NOT NULL DEFAULT '{}',
+    error TEXT,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS agent_sessions (
+    id TEXT PRIMARY KEY,
+    query TEXT NOT NULL,
+    title TEXT NOT NULL,
+    book_id TEXT,
+    total_minutes INTEGER NOT NULL,
+    current_step INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL,
+    steps_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
   CREATE INDEX IF NOT EXISTS idx_highlights_book_id ON highlights(book_id);
   CREATE INDEX IF NOT EXISTS idx_notes_book_id ON notes(book_id);
   CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON ai_messages(conversation_id);
@@ -177,7 +222,11 @@ function initializeDatabase(): { sqlite: NativeDatabase; db: OrmDatabase } {
   CREATE INDEX IF NOT EXISTS idx_vocabulary_reviews_word ON vocabulary_reviews(vocabulary_id);
   CREATE INDEX IF NOT EXISTS idx_reading_sessions_book ON reading_sessions(book_id, started_at);
   CREATE INDEX IF NOT EXISTS idx_search_documents_book ON search_documents(book_id, source_type);
+  CREATE INDEX IF NOT EXISTS idx_agent_runs_created_at ON agent_runs(created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_agent_sessions_status ON agent_sessions(status, updated_at DESC);
 `);
+
+  ensureBookColumns(connection);
 
   const seedRole = connection.prepare(`
   INSERT OR IGNORE INTO learning_roles (
@@ -209,6 +258,22 @@ function initializeDatabase(): { sqlite: NativeDatabase; db: OrmDatabase } {
         updatedAt: seededAt,
       });
       if (result.changes > 0 && shouldBecomeDefault) hasDefaultRole = true;
+    }
+  })();
+
+  const seedGoal = connection.prepare(`
+    INSERT OR IGNORE INTO learning_goals (
+      id, metric, target_value, period, is_active, created_at, updated_at
+    ) VALUES (?, ?, ?, 'weekly', 1, ?, ?)
+  `);
+  connection.transaction(() => {
+    const defaults = [
+      ["goal_reading_minutes", "reading_minutes", 180],
+      ["goal_review_count", "review_count", 50],
+      ["goal_new_words", "new_words", 30],
+    ] as const;
+    for (const [id, metric, target] of defaults) {
+      seedGoal.run(id, metric, target, seededAt, seededAt);
     }
   })();
 

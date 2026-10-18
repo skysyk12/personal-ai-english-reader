@@ -5,7 +5,7 @@ set -u
 SCRIPT_PATH="${0:A}"
 PROJECT_DIR="${SCRIPT_PATH:h:h}"
 PORT="8190"
-URL="http://127.0.0.1:${PORT}/library"
+URL="http://127.0.0.1:${PORT}"
 LABEL="com.sunyongkang.margin-reader"
 USER_DOMAIN="gui/$(id -u)"
 JOB_TARGET="${USER_DOMAIN}/${LABEL}"
